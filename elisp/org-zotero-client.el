@@ -214,7 +214,173 @@ Returns alist of keyword names to values."
                       (goto-char (point-min)))
                     (display-buffer notes-buffer)
                     (message "✅ Annotations displayed in buffer")
-                    notes-buffer))))))))))
+                    notes-buffer))))))))
+
+;;; Collection annotation functions
+
+(defun org-zotero-select-library ()
+  "Select a Zotero library interactively from available libraries.
+Returns library ID or nil for personal library."
+  (let* ((libraries (zotero-get-libraries))
+         (choices '())
+         (library-map '()))
+    
+    ;; Add personal library option
+    (push "Personal Library" choices)
+    (push (cons "Personal Library" nil) library-map)
+    
+    ;; Add group libraries
+    (dolist (library libraries)
+      (let* ((id (cdr (assq 'id library)))
+             (data (cdr (assq 'data library)))
+             (name (cdr (assq 'name data)))
+             (id-string (if (numberp id) (number-to-string id) id))
+             (display-name (format "%s (ID: %s)" name id)))
+        (push display-name choices)
+        (push (cons display-name id-string) library-map)))
+    
+    (let ((selected (completing-read "Select library: " (nreverse choices) nil t)))
+      (cdr (assoc selected library-map)))))
+
+(defun org-zotero-select-collection (library-id)
+  "Select a collection from specified library.
+LIBRARY-ID is the library to search (nil for personal library).
+Returns collection ID."
+  (let* ((collections (zotero-get-collections library-id))
+         (choices '())
+         (collection-map '()))
+    
+    (if (null collections)
+        (progn
+          (message "No collections found in library")
+          nil)
+      
+      (dolist (collection collections)
+        (let* ((id (cdr (assq 'key collection)))
+               (data (cdr (assq 'data collection)))
+               (name (cdr (assq 'name data)))
+               (parent (cdr (assq 'parentCollection data)))
+               (display-name (if parent
+                                 (format "%s (subcollection)" name)
+                               name)))
+          (push display-name choices)
+          (push (cons display-name id) collection-map)))
+      
+      (let ((selected (completing-read "Select collection: " (nreverse choices) nil t)))
+        (cdr (assoc selected collection-map))))))
+
+;;;###autoload
+(defun org-zotero-extract-collection-annotations-interactive ()
+  "Interactively extract all annotations from a Zotero collection.
+Prompts user to select library, collection, and output file."
+  (interactive)
+  (let* ((library-id (org-zotero-select-library))
+         (collection-id (org-zotero-select-collection library-id)))
+    
+    (if (not collection-id)
+        (message "No collection selected or no collections available")
+      
+      (message "Retrieving collection information...")
+      (let ((collection-info (zotero-get-collection-info collection-id library-id)))
+        (if (not collection-info)
+            (message "Error: Collection not found")
+          
+          (let* ((collection-data (cdr (assq 'data collection-info)))
+                 (collection-name (cdr (assq 'name collection-data)))
+                 (output-file (read-file-name 
+                               (format "Save annotations to file: ")
+                               nil 
+                               (format "collection_%s.org" 
+                                       (replace-regexp-in-string "[^a-zA-Z0-9_-]" "_" collection-name)))))
+            
+            (message "Extracting annotations from collection: %s" collection-name)
+            (let ((collection-annotations (zotero-get-all-collection-annotations collection-id library-id)))
+              
+              (if (assq 'error collection-annotations)
+                  (message "Error: %s" (cdr (assq 'error collection-annotations)))
+                
+                (let* ((items-count (cdr (assq 'items-count collection-annotations)))
+                       (items-with-annotations (length (cdr (assq 'items collection-annotations))))
+                       (formatted-content (zotero-format-collection-annotations-as-org collection-annotations)))
+                  
+                  (message "Found %d items in collection, %d with annotations" 
+                           items-count items-with-annotations)
+                  
+                  (if (= items-with-annotations 0)
+                      (message "No items with annotations found in this collection")
+                    
+                    ;; Save to file
+                    (with-temp-file output-file
+                      (insert (format "#+TITLE: Collection Annotations - %s\n" collection-name))
+                      (when library-id
+                        (insert (format "#+ZOTERO_LIBRARY_ID: %s\n" library-id)))
+                      (insert "\n")
+                      (insert formatted-content))
+                    
+                    (message "✅ Collection annotations saved to: %s" output-file)
+                    
+                    ;; Also display in buffer
+                    (let ((notes-buffer (get-buffer-create "*Zotero Collection Annotations*")))
+                      (with-current-buffer notes-buffer
+                        (erase-buffer)
+                        (insert (format "#+TITLE: Collection Annotations - %s\n" collection-name))
+                        (when library-id
+                          (insert (format "#+ZOTERO_LIBRARY_ID: %s\n" library-id)))
+                        (insert "\n")
+                        (insert formatted-content)
+                        (org-mode)
+                        (goto-char (point-min)))
+                      (display-buffer notes-buffer))
+                    
+                    output-file)))))))))))
+
+;;;###autoload  
+(defun org-zotero-extract-collection-annotations (collection-id &optional library-id output-file)
+  "Extract all annotations from a Zotero collection.
+COLLECTION-ID is the Zotero collection ID.
+LIBRARY-ID is optional library ID (nil for personal library).
+OUTPUT-FILE is optional output file path."
+  (interactive "sCollection ID: ")
+  (let* ((collection-info (zotero-get-collection-info collection-id library-id)))
+    (if (not collection-info)
+        (message "Error: Collection %s not found" collection-id)
+      
+      (let* ((collection-data (cdr (assq 'data collection-info)))
+             (collection-name (cdr (assq 'name collection-data))))
+        
+        (unless output-file
+          (setq output-file (read-file-name 
+                             "Save annotations to file: "
+                             nil
+                             (format "collection_%s.org" 
+                                     (replace-regexp-in-string "[^a-zA-Z0-9_-]" "_" collection-name)))))
+        
+        (message "Extracting annotations from collection: %s" collection-name)
+        (let ((collection-annotations (zotero-get-all-collection-annotations collection-id library-id)))
+          
+          (if (assq 'error collection-annotations)
+              (message "Error: %s" (cdr (assq 'error collection-annotations)))
+            
+            (let* ((items-count (cdr (assq 'items-count collection-annotations)))
+                   (items-with-annotations (length (cdr (assq 'items collection-annotations))))
+                   (formatted-content (zotero-format-collection-annotations-as-org collection-annotations)))
+              
+              (message "Found %d items in collection, %d with annotations" 
+                       items-count items-with-annotations)
+              
+              (if (= items-with-annotations 0)
+                  (message "No items with annotations found in this collection")
+                
+                ;; Save to file
+                (with-temp-file output-file
+                  (insert (format "#+TITLE: Collection Annotations - %s\n" collection-name))
+                  (when library-id
+                    (insert (format "#+ZOTERO_LIBRARY_ID: %s\n" library-id)))
+                  (insert "\n")
+                  (insert formatted-content))
+                
+                (message "✅ Collection annotations saved to: %s" output-file)
+                output-file)))))))))
 
 (provide 'org-zotero-client)
 

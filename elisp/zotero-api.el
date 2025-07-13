@@ -523,6 +523,128 @@ Returns BibTeX citation key or nil if not found."
      (message "Error getting citation key for item %s: %s" item-id (error-message-string err))
      nil)))
 
+;;; Collection annotation functions
+
+(defun zotero-get-collection-items (collection-id &optional library-id limit)
+  "Get all items from a specific collection.
+COLLECTION-ID is the Zotero collection ID.
+LIBRARY-ID is the library/group ID (nil for personal library).
+LIMIT is the maximum number of items to return (default 100)."
+  (let* ((limit (or limit 100))
+         (params (format "?collection=%s&limit=%d" collection-id limit))
+         (endpoint (if library-id
+                       (format "/groups/%s/items%s" library-id params)
+                     (format "/users/%s/items%s" zotero-default-user-id params))))
+    (let ((response (zotero--make-request endpoint)))
+      (if (vectorp response) (append response nil) response))))
+
+(defun zotero-get-collection-info (collection-id &optional library-id)
+  "Get information about a specific collection.
+COLLECTION-ID is the Zotero collection ID.
+LIBRARY-ID is the library/group ID (nil for personal library).
+Returns collection information alist or nil if not found."
+  (let ((endpoint (if library-id
+                      (format "/groups/%s/collections/%s" library-id collection-id)
+                    (format "/users/%s/collections/%s" zotero-default-user-id collection-id))))
+    (zotero--make-request endpoint)))
+
+(defun zotero-get-all-collection-annotations (collection-id &optional library-id)
+  "Get all annotations from all items in a collection.
+COLLECTION-ID is the Zotero collection ID.
+LIBRARY-ID is the library/group ID (nil for personal library).
+Returns an alist containing collection info and all annotations organized by item."
+  (let* ((collection-info (zotero-get-collection-info collection-id library-id)))
+    (if (not collection-info)
+        (list (cons 'error (format "Collection %s not found" collection-id)))
+      
+      (let* ((collection-items (zotero-get-collection-items collection-id library-id 1000))
+             (collection-data (cdr (assq 'data collection-info)))
+             (collection-name (or (cdr (assq 'name collection-data)) "Unknown"))
+             (collection-parent (cdr (assq 'parentCollection collection-data)))
+             (items-with-annotations '()))
+        
+        ;; Process each item in the collection
+        (dolist (item collection-items)
+          (let* ((item-id (cdr (assq 'key item)))
+                 (item-data (cdr (assq 'data item)))
+                 (item-type (cdr (assq 'itemType item-data)))
+                 (item-title (or (cdr (assq 'title item-data)) "Unknown")))
+            
+            (message "Processing item: %s (%s)" item-title item-type)
+            
+            ;; Skip attachments and annotations - we only want top-level items
+            (unless (member item-type '("attachment" "note" "annotation"))
+              (message "Getting annotations for item: %s" item-id)
+              ;; Get annotations for this item
+              (let ((item-annotations (zotero-get-all-annotations-for-item item-id library-id)))
+                (message "Got annotations result for %s" item-id)
+                ;; Only include items that have annotations
+                (when (and (not (assq 'error item-annotations))
+                           (cdr (assq 'attachments item-annotations)))
+                  (let ((total-annotations 0))
+                    (dolist (attachment (cdr (assq 'attachments item-annotations)))
+                      (setq total-annotations (+ total-annotations (cdr (assq 'annotations-count attachment)))))
+                    (when (> total-annotations 0)
+                      (message "Found %d annotations for %s" total-annotations item-title)
+                      (push item-annotations items-with-annotations))))))))
+        
+        (list (cons 'collection-id collection-id)
+              (cons 'collection-name collection-name)
+              (cons 'collection-parent collection-parent)
+              (cons 'library-id library-id)
+              (cons 'items-count (length collection-items))
+              (cons 'items (nreverse items-with-annotations)))))))
+
+(defun zotero-format-collection-annotations-as-org (collection-data)
+  "Format collection annotation data as org-mode text.
+COLLECTION-DATA should be the result from `zotero-get-all-collection-annotations'.
+Returns formatted org-mode string."
+  (let ((error-msg (cdr (assq 'error collection-data))))
+    (if error-msg
+        (format "# Error: %s\n" error-msg)
+      
+      (let* ((collection-name (zotero-normalize-text-encoding (cdr (assq 'collection-name collection-data))))
+             (collection-id (cdr (assq 'collection-id collection-data)))
+             (library-id (cdr (assq 'library-id collection-data)))
+             (items-count (cdr (assq 'items-count collection-data)))
+             (items (cdr (assq 'items collection-data)))
+             (items-with-annotations (length items))
+             (org-content '()))
+        
+        ;; Main collection header
+        (push (format "* Collection: %s" collection-name) org-content)
+        (push "  :PROPERTIES:" org-content)
+        (push (format "  :COLLECTION_ID: %s" collection-id) org-content)
+        (when library-id
+          (push (format "  :LIBRARY_ID: %s" library-id) org-content))
+        (push (format "  :TOTAL_ITEMS: %d" items-count) org-content)
+        (push (format "  :ITEMS_WITH_ANNOTATIONS: %d" items-with-annotations) org-content)
+        (push "  :END:" org-content)
+        (push "" org-content)
+        
+        (if (null items)
+            (progn
+              (push "No items with annotations found in this collection." org-content)
+              (push "" org-content))
+          
+          ;; Process each item with annotations
+          (dolist (item-data items)
+            ;; Get citation key for org-cite format
+            (let* ((item-id (cdr (assq 'item-id item-data)))
+                   (citation-key (zotero-get-citation-key-for-item item-id library-id))
+                   ;; Format item annotations (use existing function but at sub-level)
+                   (item-org (zotero-format-as-org-mode item-data citation-key)))
+              
+              ;; Adjust heading levels (add one * to each heading)
+              (dolist (line (split-string item-org "\n"))
+                (if (string-prefix-p "*" line)
+                    (push (concat "*" line) org-content)
+                  (push line org-content)))
+              
+              (push "" org-content))))
+        
+        (mapconcat 'identity (nreverse org-content) "\n")))))
+
 (provide 'zotero-api)
 
 ;;; zotero-api.el ends here
