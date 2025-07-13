@@ -1,0 +1,180 @@
+;;; org-zotero-client.el --- Zotero annotation extraction for org-mode -*- lexical-binding: t; -*-
+
+(require 'bibtex)
+(require 'zotero-api)
+(require 'cl-lib)
+
+;;; Variables
+
+(defvar org-zotero--citation-mapping nil
+  "Cached citation key to Zotero ID mapping.")
+
+(defvar org-zotero--mapping-source nil
+  "Source file for cached mapping.")
+
+;;; Core functions
+
+(defun org-zotero-list-libraries ()
+  "List all available Zotero libraries."
+  (interactive)
+  (let ((libraries (zotero-get-libraries)))
+    (if (called-interactively-p 'any)
+        (progn
+          (message "Available Zotero libraries:")
+          (dolist (lib libraries)
+            (let ((id (cdr (assq 'id lib)))
+                  (name (cdr (assq 'name lib)))
+                  (type (cdr (assq 'type lib))))
+              (message "  %s: %s (%s)" id name type))))
+      libraries)))
+
+(defun org-zotero-set-library-for-buffer (library-id)
+  "Set the ZOTERO_LIBRARY_ID property for the current buffer."
+  (interactive 
+   (list (read-string "Library ID: " 
+                      (org-zotero-get-buffer-library-id))))
+  (save-excursion
+    (goto-char (point-min))
+    (if (re-search-forward "^\\s-*#\\+ZOTERO_LIBRARY_ID:\\s-*\\(.+\\)\\s-*$" nil t)
+        (replace-match (format "#+ZOTERO_LIBRARY_ID: %s" library-id))
+      (goto-char (point-min))
+      (insert (format "#+ZOTERO_LIBRARY_ID: %s\n" library-id))))
+  (message "Set library ID to: %s" library-id))
+
+(defun org-zotero-get-buffer-library-id ()
+  "Get ZOTERO_LIBRARY_ID property from current buffer."
+  (save-excursion
+    (goto-char (point-min))
+    (when (re-search-forward "^\\s-*#\\+ZOTERO_LIBRARY_ID:\\s-*\\(.+\\)\\s-*$" nil t)
+      (match-string 1))))
+
+(defun org-zotero-get-bibliography-file ()
+  "Get bibliography file path from #+BIBLIOGRAPHY keyword in current buffer."
+  (save-excursion
+    (goto-char (point-min))
+    (when (re-search-forward "^\\s-*#\\+BIBLIOGRAPHY:\\s-*\\(.+\\)\\s-*$" nil t)
+      (let ((bib-path (match-string 1)))
+        (if (file-name-absolute-p bib-path)
+            bib-path
+          (expand-file-name bib-path (file-name-directory (buffer-file-name))))))))
+
+(defun org-zotero-find-citations-in-buffer ()
+  "Find all Zotero citations in current buffer."
+  (let ((citations '())
+        (patterns '("@\\([A-Za-z0-9_-]+\\)"
+                    "\\[cite:@\\([A-Za-z0-9_-]+\\)\\]")))
+    (save-excursion
+      (goto-char (point-min))
+      (dolist (pattern patterns)
+        (goto-char (point-min))
+        (while (re-search-forward pattern nil t)
+          (let ((start (match-beginning 0))
+                (end (match-end 0))
+                (item-id (match-string 1)))
+            (push (list start end item-id) citations)))))
+    (let ((seen (make-hash-table :test 'equal))
+          (unique-citations '()))
+      (dolist (citation citations)
+        (let ((item-id (nth 2 citation)))
+          (unless (gethash item-id seen)
+            (puthash item-id t seen)
+            (push citation unique-citations))))
+      (sort unique-citations (lambda (a b) (< (car a) (car b)))))))
+
+(defun org-zotero-build-citation-mapping (bib-file &optional library-id)
+  "Build mapping from BibTeX citation keys to Zotero item IDs."
+  (when (file-exists-p bib-file)
+    (with-temp-buffer
+      (insert-file-contents bib-file)
+      (bibtex-mode)
+      (let ((mapping '())
+            (entry-count 0))
+        (goto-char (point-min))
+        (while (bibtex-skip-to-valid-entry)
+          (setq entry-count (1+ entry-count))
+          (let ((citation-key (bibtex-key-in-head))
+                (zotero-id nil))
+            (save-excursion
+              (bibtex-beginning-of-entry)
+              (let ((entry-end (save-excursion (bibtex-end-of-entry) (point))))
+                (when (re-search-forward "^[ \\t]*key[ \\t]*=[ \\t]*{\\([^}]+\\)}" entry-end t)
+                  (setq zotero-id (match-string 1)))))
+            (when (and citation-key zotero-id)
+              (push (cons citation-key zotero-id) mapping)))
+          (bibtex-end-of-entry))
+        (message "Successfully mapped %d citation keys to Zotero IDs" (length mapping))
+        mapping))))
+
+(defun org-zotero-resolve-citation-key (citation-key &optional library-id)
+  "Resolve BibTeX citation key to Zotero item ID."
+  (unless (and org-zotero--citation-mapping org-zotero--mapping-source)
+    (let ((bib-file (org-zotero-get-bibliography-file)))
+      (unless bib-file
+        (error "No bibliography file found"))
+      (unless (file-exists-p bib-file)
+        (error "Bibliography file not found: %s" bib-file))
+      (setq org-zotero--citation-mapping (org-zotero-build-citation-mapping bib-file library-id))
+      (setq org-zotero--mapping-source bib-file)))
+  (cdr (assoc citation-key org-zotero--citation-mapping)))
+
+(defun org-zotero-extract-all-annotations-to-notes (&optional output-file)
+  "Extract all annotations from citations in current buffer."
+  (interactive)
+  (let* ((buffer-library-id (org-zotero-get-buffer-library-id))
+         (citations (org-zotero-find-citations-in-buffer)))
+    
+    (if (not citations)
+        (message "No Zotero citations found in buffer")
+      
+      (when (called-interactively-p 'any)
+        (unless output-file
+          (setq output-file (read-file-name "Save annotations to file: ")))
+        (unless (y-or-n-p (format "Found %d citations. Extract annotations? " (length citations)))
+          (message "Cancelled by user")
+          (cl-return-from org-zotero-extract-all-annotations-to-notes nil)))
+      
+      (let ((citation-key (substring-no-properties (nth 2 (car citations))))
+            (zotero-id nil))
+        (message "Processing citation: %s" citation-key)
+        (setq zotero-id (org-zotero-resolve-citation-key citation-key buffer-library-id))
+        
+        (if (not zotero-id)
+            (message "Citation key '%s' not found" citation-key)
+          
+          (message "Resolved: %s → %s" citation-key zotero-id)
+          (let* ((item-data (zotero-get-item zotero-id buffer-library-id))
+                 (title (or (cdr (assq 'title (cdr (assq 'data item-data)))) "Unknown Title"))
+                 (annotations-data (zotero-get-all-annotations-for-item zotero-id buffer-library-id))
+                 (attachments (cdr (assq 'attachments annotations-data)))
+                 (total-annotations 0))
+            
+            (dolist (attachment attachments)
+              (let ((count (cdr (assq 'annotations-count attachment))))
+                (when count
+                  (setq total-annotations (+ total-annotations count)))))
+            
+            (message "Found %d annotations in %d PDFs" total-annotations (length attachments))
+            
+            (when (> total-annotations 0)
+              (let ((formatted (zotero-format-as-org-mode annotations-data)))
+                (if output-file
+                    (progn
+                      (with-temp-file output-file
+                        (insert (format "#+TITLE: %s\n\n" title))
+                        (insert formatted))
+                      (message "✅ Annotations saved to: %s" output-file)
+                      output-file)
+                  (let ((notes-buffer (get-buffer-create "*Zotero Annotations*")))
+                    (with-current-buffer notes-buffer
+                      (erase-buffer)
+                      (insert (format "#+TITLE: %s\n\n" title))
+                      (insert formatted)
+                      (org-mode)
+                      (goto-char (point-min)))
+                    (display-buffer notes-buffer)
+                    (message "✅ Annotations displayed in buffer")
+                    notes-buffer))))))))))
+
+(provide 'org-zotero-client)
+
+;;; org-zotero-client.el ends here

@@ -219,6 +219,7 @@ if __name__ == "__main__":
 
 
 # Example usage as a module:
+
 # 
 # from zotero_annotations import ZoteroLocalAPI
 # 
