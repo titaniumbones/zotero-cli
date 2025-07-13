@@ -228,14 +228,137 @@ Returns an alist with item info and all annotations organized by attachment."
 
 ;;; Org-mode formatting
 
-(defun zotero-format-as-org-mode (annotations-data)
+(defun zotero-normalize-text-encoding (text)
+  "Fix common UTF-8/Latin-1 encoding issues in annotation text.
+TEXT is the raw text that may have encoding issues.
+Returns text with corrected character encoding."
+  (if (not text)
+      text
+    (let ((replacements
+           '(;; Smart quotes and dashes
+             ("â" . "\"")    ; Left double quotation mark
+             ("â" . "\"")    ; Right double quotation mark
+             ("â" . "'")     ; Left single quotation mark  
+             ("â" . "'")     ; Right single quotation mark
+             ("â" . "—")     ; Em dash
+             ("â" . "–")     ; En dash
+             
+             ;; Accented characters
+             ("Ã¡" . "á")    ; a with acute
+             ("Ã©" . "é")    ; e with acute
+             ("Ã­" . "í")    ; i with acute
+             ("Ã³" . "ó")    ; o with acute
+             ("Ãº" . "ú")    ; u with acute
+             ("Ã±" . "ñ")    ; n with tilde
+             ("Ã" . "À")     ; A with grave
+             ("Ã¨" . "è")    ; e with grave
+             ("Ã¬" . "ì")    ; i with grave
+             ("Ã²" . "ò")    ; o with grave
+             ("Ã¹" . "ù")    ; u with grave
+             ("Ã¤" . "ä")    ; a with diaeresis
+             ("Ã«" . "ë")    ; e with diaeresis
+             ("Ã¯" . "ï")    ; i with diaeresis
+             ("Ã¶" . "ö")    ; o with diaeresis
+             ("Ã¼" . "ü")    ; u with diaeresis
+             ("Ã§" . "ç")    ; c with cedilla
+             
+             ;; Other common issues
+             ("â¢" . "•")    ; Bullet point
+             ("â¦" . "…")    ; Horizontal ellipsis
+             ("Â°" . "°")    ; Degree symbol
+             ("Â±" . "±")    ; Plus-minus sign
+             ("Â²" . "²")    ; Superscript 2
+             ("Â³" . "³")    ; Superscript 3
+             ("Â½" . "½")    ; Fraction 1/2
+             ("Â¼" . "¼")    ; Fraction 1/4
+             ("Â¾" . "¾")    ; Fraction 3/4
+             ("Â©" . "©")    ; Copyright symbol
+             ("Â®" . "®")    ; Registered trademark
+             ("â¹" . "‹")    ; Single left-pointing angle quotation mark
+             ("âº" . "›")    ; Single right-pointing angle quotation mark
+             ("Â«" . "«")    ; Left-pointing double angle quotation mark
+             ("Â»" . "»")    ; Right-pointing double angle quotation mark
+             
+             ;; Additional problematic sequences seen in the data
+             ("peÂºple" . "people")
+             ("pe\"ºple" . "people")     ; Alternative corruption pattern
+             ("Ã©lite" . "élite")
+             ("Ã±res" . "fires")
+             ("dÃ©cor" . "décor")
+             ("signiÃ±cant" . "significant")
+             ("deÃ±ciencies" . "deficiencies")
+             ("proÃ±tability" . "profitability")
+             ("contempoâraries" . "contemporaries")
+             ("contempo\"raries" . "contemporaries")  ; Alternative corruption pattern
+             ("houseâhold" . "household")
+             ("âassociationistsâ" . "\"associationists\"")
+             ("âplace\"" . "\"place\"")
+             ("âpurchasing\"" . "\"purchasing\"")
+             ("âmaintain-ing" . "\"maintain-ing")
+             ("âdecentlyâ" . "\"decently\"")
+             ("âseparate spheres.'â" . "\"separate spheres.'\"")
+             ("heartâ is" . "heart\" is")  ; Specific corrupted quote pattern
+             ("âdogs" . "\"dogs")  ; Specific corrupted quote pattern
+             
+             ;; Additional corruption patterns found in the data
+             ("as;9" . "as-")           ; Common corruption pattern
+             ("as;9 " . "as- ")         ; Common corruption pattern with space
+             ("pa5-checks" . "paychecks")  ; Specific corruption
+             ("th%\\." . "they.")       ; Corruption with punctuation 
+             ("th% " . "they ")         ; Corruption with space
+             ("th%" . "they")           ; Corruption without space
+             ("undenl" . "under")       ; Truncated/corrupted word
+             ("peºple" . "people")      ; Specific corruption with ordinal symbol
+             ("contempo—raries" . "contemporaries")  ; Specific corruption
+             ("contempo\"raries" . "contemporaries")  ; Alternative corruption pattern
+             
+             ;; Smart quote corruption patterns (where " appears inappropriately)
+             ("ex\"pected" . "expected")    ; Specific corruption in text
+             ("house\"hold" . "household")  ; Specific corruption 
+             ("house\"wives" . "housewives") ; Specific corruption
+             ("single\"family" . "single-family")  ; Specific corruption
+             ("well\"publicized" . "well-publicized")  ; Specific corruption
+             ("ration-ali'ze" . "rationalize")  ; Specific corruption with apostrophe
+             ("car\"ried" . "carried")     ; Specific corruption
+             ("in\"dustrialization" . "industrialization")  ; Specific corruption
+             ("self\"sufficient" . "self-sufficient")  ; Specific corruption
+             ("water\"cooled" . "water-cooled")  ; Specific corruption
+             ("home\"places" . "home places")  ; Specific corruption - add space
+             ("work\"places" . "work places")  ; Specific corruption - add space
+             ("rules\"to" . "rules—to")    ; Em-dash corruption (rules" should be rules—)
+             ("ourselves\"generate" . "ourselves—generate")  ; Em-dash corruption
+             ("home\"namely" . "home—namely")  ; Em-dash corruption
+             
+             ;; UTF-8 corruption patterns with specific byte sequences
+             ("rules\"\x80\x94to" . "rules—to")    ; Specific UTF-8 corrupted em-dash
+             ("ourselves\"\x80\x94generate" . "ourselves—generate")  ; UTF-8 corrupted em-dash
+             ("home\"\x80\x94namely" . "home—namely")  ; UTF-8 corrupted em-dash
+             )))
+      ;; First apply exact string replacements
+      (dolist (replacement replacements)
+        (setq text (replace-regexp-in-string 
+                    (regexp-quote (car replacement))
+                    (cdr replacement)
+                    text t t)))
+      
+      ;; Then apply regex patterns for more complex corruptions
+      (setq text (replace-regexp-in-string 
+                  "rules\"[^a-zA-Z]*to" "rules—to" text t t))
+      (setq text (replace-regexp-in-string 
+                  "ourselves\"[^a-zA-Z]*generate" "ourselves—generate" text t t))
+      (setq text (replace-regexp-in-string 
+                  "home\"[^a-zA-Z]*namely" "home—namely" text t t))
+      text)))
+
+(defun zotero-format-as-org-mode (annotations-data &optional citation-key)
   "Format ANNOTATIONS-DATA as org-mode text.
-ANNOTATIONS-DATA should be the result from `zotero-get-all-annotations-for-item'."
+ANNOTATIONS-DATA should be the result from `zotero-get-all-annotations-for-item'.
+CITATION-KEY is optional BibTeX citation key for org-cite format."
   (let ((error-msg (cdr (assq 'error annotations-data))))
     (if error-msg
         (format "# Error: %s\n" error-msg)
       
-      (let* ((item-title (cdr (assq 'item-title annotations-data)))
+      (let* ((item-title (zotero-normalize-text-encoding (cdr (assq 'item-title annotations-data))))
              (item-type (cdr (assq 'item-type annotations-data)))
              (item-id (cdr (assq 'item-id annotations-data)))
              (attachments (cdr (assq 'attachments annotations-data)))
@@ -251,7 +374,7 @@ ANNOTATIONS-DATA should be the result from `zotero-get-all-annotations-for-item'
         
         ;; Process each PDF attachment
         (dolist (attachment attachments)
-          (let* ((attachment-title (cdr (assq 'attachment-title attachment)))
+          (let* ((attachment-title (zotero-normalize-text-encoding (cdr (assq 'attachment-title attachment))))
                  (attachment-id (cdr (assq 'attachment-id attachment)))
                  (filename (cdr (assq 'filename attachment)))
                  (annotations (cdr (assq 'annotations attachment))))
@@ -273,8 +396,8 @@ ANNOTATIONS-DATA should be the result from `zotero-get-all-annotations-for-item'
               (dolist (annotation annotations)
                 (let* ((ann-data (cdr (assq 'data annotation)))
                        (ann-type (or (cdr (assq 'annotationType ann-data)) "unknown"))
-                       (text (cdr (assq 'annotationText ann-data)))
-                       (comment (cdr (assq 'annotationComment ann-data)))
+                       (text (zotero-normalize-text-encoding (cdr (assq 'annotationText ann-data))))
+                       (comment (zotero-normalize-text-encoding (cdr (assq 'annotationComment ann-data))))
                        (page-label (cdr (assq 'annotationPageLabel ann-data)))
                        (position (cdr (assq 'annotationPosition ann-data)))
                        (page-index (when (and position (listp position))
@@ -292,24 +415,27 @@ ANNOTATIONS-DATA should be the result from `zotero-get-all-annotations-for-item'
                     (setq zotero-link (concat zotero-link "?page=" (number-to-string (1+ page-index))))
                     (setq page-info (format " (p. %d)" (1+ page-index)))))
                   
-                  ;; Annotation header
-                  (push (format "*** %s%s" (capitalize ann-type) page-info) org-content)
-                  
-                  ;; Annotation text
+                  ;; Annotation text with citation
                   (when (and text (not (string-empty-p text)))
                     (push "#+BEGIN_QUOTE" org-content)
                     (push text org-content)
+                    
+                    ;; Add org-cite citation inside quote block
+                    (when citation-key
+                      (let ((page-ref (cond
+                                       (page-label page-label)
+                                       ((and page-index (numberp page-index)) (number-to-string (1+ page-index)))
+                                       (t "?"))))
+                        (push "" org-content)  ; Empty line before citation
+                        (push (format "[cite:@%s, p.%s]" citation-key page-ref) org-content)))
+                    
                     (push "#+END_QUOTE" org-content)
                     (push "" org-content))
                   
                   ;; Annotation comment
                   (when (and comment (not (string-empty-p comment)))
                     (push (format "*Comment:* %s" comment) org-content)
-                    (push "" org-content))
-                  
-                  ;; Zotero link
-                  (push (format "[[%s][Open in Zotero]]" zotero-link) org-content)
-                  (push "" org-content))))))
+                    (push "" org-content)))))))
         
         (mapconcat 'identity (nreverse org-content) "\n")))))
 
@@ -371,7 +497,7 @@ Returns BibTeX string or nil if export failed."
   (let* ((endpoint (if library-id
                        (format "/groups/%s/items/%s" library-id item-id)
                      (format "/users/%s/items/%s" zotero-default-user-id item-id)))
-         (url (format "%s%s?format=bibtex" zotero-base-url endpoint)))
+         (url (format "%s/api%s?format=bibtex" zotero-base-url endpoint)))
     (condition-case err
         (let ((response (request url
                           :type "GET"
@@ -380,6 +506,22 @@ Returns BibTeX string or nil if export failed."
           (when (eq (request-response-status-code response) 200)
             (string-trim (request-response-data response))))
       (error nil))))
+
+(defun zotero-get-citation-key-for-item (item-id &optional library-id)
+  "Get the BibTeX citation key for a Zotero item by exporting it as BibTeX.
+ITEM-ID is the Zotero item ID.
+LIBRARY-ID is optional library ID for group libraries.
+Returns BibTeX citation key or nil if not found."
+  (condition-case err
+      (let ((bibtex-data (zotero-export-item-bibtex item-id library-id)))
+        (when bibtex-data
+          ;; Parse the BibTeX to extract the citation key
+          ;; Match @type{citation_key, ...
+          (when (string-match "@\\w+\\s-*{\\s-*\\([^,\\s-]+\\)\\s-*," bibtex-data)
+            (match-string 1 bibtex-data))))
+    (error
+     (message "Error getting citation key for item %s: %s" item-id (error-message-string err))
+     nil)))
 
 (provide 'zotero-api)
 

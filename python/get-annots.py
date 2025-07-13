@@ -302,12 +302,141 @@ class ZoteroLocalAPI:
         
         return result
     
-    def format_as_org_mode(self, annotations_data: Dict[str, Any]) -> str:
+    def normalize_text_encoding(self, text: str) -> str:
+        """
+        Fix common UTF-8/Latin-1 encoding issues in annotation text.
+        
+        Args:
+            text: Raw text that may have encoding issues
+            
+        Returns:
+            Text with corrected character encoding
+        """
+        if not text:
+            return text
+            
+        # Common character replacements for UTF-8 decoded as Latin-1
+        replacements = {
+            # Smart quotes and dashes - corrected mappings
+            'â': '"',  # Corrupted left double quotation mark
+            'â': '"',  # Corrupted right double quotation mark  
+            'â': "'",  # Corrupted left single quotation mark
+            'â': "'",  # Corrupted right single quotation mark
+            'â': '—',  # Corrupted em dash
+            'â': '–',  # Corrupted en dash
+            
+            # Accented characters
+            'Ã¡': 'á',  # a with acute
+            'Ã©': 'é',  # e with acute
+            'Ã­': 'í',  # i with acute
+            'Ã³': 'ó',  # o with acute
+            'Ãº': 'ú',  # u with acute
+            'Ã±': 'ñ',  # n with tilde
+            'Ã': 'À',   # A with grave
+            'Ã¨': 'è',  # e with grave
+            'Ã¬': 'ì',  # i with grave
+            'Ã²': 'ò',  # o with grave
+            'Ã¹': 'ù',  # u with grave
+            'Ã¤': 'ä',  # a with diaeresis
+            'Ã«': 'ë',  # e with diaeresis
+            'Ã¯': 'ï',  # i with diaeresis
+            'Ã¶': 'ö',  # o with diaeresis
+            'Ã¼': 'ü',  # u with diaeresis
+            'Ã§': 'ç',  # c with cedilla
+            
+            # Other common issues
+            'â¢': '•',  # Bullet point
+            'â¦': '…',  # Horizontal ellipsis
+            'Â°': '°',  # Degree symbol
+            'Â±': '±',  # Plus-minus sign
+            'Â²': '²',  # Superscript 2
+            'Â³': '³',  # Superscript 3
+            'Â½': '½',  # Fraction 1/2
+            'Â¼': '¼',  # Fraction 1/4
+            'Â¾': '¾',  # Fraction 3/4
+            'Â©': '©',  # Copyright symbol
+            'Â®': '®',  # Registered trademark
+            'â¹': '‹',  # Single left-pointing angle quotation mark
+            'âº': '›',  # Single right-pointing angle quotation mark
+            'Â«': '«',  # Left-pointing double angle quotation mark
+            'Â»': '»',  # Right-pointing double angle quotation mark
+            
+            # Additional problematic sequences seen in the data
+            'peÂºple': 'people',
+            'pe"ºple': 'people',     # Alternative corruption pattern
+            'Ã©lite': 'élite',
+            'Ã±res': 'fires',
+            'dÃ©cor': 'décor',
+            'signiÃ±cant': 'significant',
+            'deÃ±ciencies': 'deficiencies',
+            'proÃ±tability': 'profitability',
+            'contempoâraries': 'contemporaries',
+            'contempo"raries': 'contemporaries',  # Alternative corruption pattern
+            'houseâhold': 'household',
+            'âassociationistsâ': '"associationists"',
+            'âplace"': '"place"',
+            'âpurchasing"': '"purchasing"',
+            'âmaintain-ing': '"maintain-ing',
+            'âdecentlyâ': '"decently"',
+            'âseparate spheres.\'â': '"separate spheres.\'"',
+            'heartâ is': 'heart" is',  # Specific corrupted quote pattern
+            'âdogs': '"dogs',  # Specific corrupted quote pattern
+            
+            # Additional corruption patterns found in the data
+            'as;9': 'as-',           # Common corruption pattern
+            'as;9 ': 'as- ',         # Common corruption pattern with space
+            'pa5-checks': 'paychecks',  # Specific corruption
+            'th%.': 'they.',       # Corruption with punctuation 
+            'th% ': 'they ',       # Corruption with space
+            'th%': 'they',         # Corruption without space
+            'undenl': 'under',       # Truncated/corrupted word
+            'peºple': 'people',      # Specific corruption with ordinal symbol
+            'contempo—raries': 'contemporaries',  # Specific corruption
+            'contempo"raries': 'contemporaries',  # Alternative corruption pattern
+            
+            # Smart quote corruption patterns (where " appears inappropriately)
+            'ex"pected': 'expected',    # Specific corruption in text
+            'house"hold': 'household',  # Specific corruption 
+            'house"wives': 'housewives', # Specific corruption
+            'single"family': 'single-family',  # Specific corruption
+            'well"publicized': 'well-publicized',  # Specific corruption
+            'ration-ali\'ze': 'rationalize',  # Specific corruption with apostrophe
+            'car"ried': 'carried',     # Specific corruption
+            'in"dustrialization': 'industrialization',  # Specific corruption
+            'self"sufficient': 'self-sufficient',  # Specific corruption
+            'water"cooled': 'water-cooled',  # Specific corruption
+            '"women\'s work"': '"women\'s work"',  # Keep proper quotes in quotes
+            'home"places': 'home places',  # Specific corruption - add space
+            'work"places': 'work places',  # Specific corruption - add space
+            'rules"to': 'rules—to',    # Em-dash corruption (rules" should be rules—)
+            'ourselves"generate': 'ourselves—generate',  # Em-dash corruption
+            'home"namely': 'home—namely',  # Em-dash corruption
+            
+            # UTF-8 corruption patterns with specific byte sequences
+            'rules"\x80\x94to': 'rules—to',    # Specific UTF-8 corrupted em-dash
+            'ourselves"\x80\x94generate': 'ourselves—generate',  # UTF-8 corrupted em-dash
+            'home"\x80\x94namely': 'home—namely',  # UTF-8 corrupted em-dash
+            
+            # Additional UTF-8 corruption patterns found in real data
+            'rules"‚"to': 'rules—to',    # Alternative corruption representation
+            'ourselves"‚"generate': 'ourselves—generate',  # Alternative corruption
+            'home"‚"namely': 'home—namely',  # Alternative corruption
+        }
+        
+        # Apply replacements
+        normalized_text = text
+        for wrong, correct in replacements.items():
+            normalized_text = normalized_text.replace(wrong, correct)
+            
+        return normalized_text
+    
+    def format_as_org_mode(self, annotations_data: Dict[str, Any], citation_key: Optional[str] = None) -> str:
         """
         Format annotation data as org-mode text
         
         Args:
             annotations_data: Result from get_all_annotations_for_item
+            citation_key: Optional BibTeX citation key for org-cite format
             
         Returns:
             Formatted org-mode string
@@ -318,7 +447,7 @@ class ZoteroLocalAPI:
         org_content = []
         
         # Main header with item info
-        item_title = annotations_data.get('item_title', 'Unknown')
+        item_title = self.normalize_text_encoding(annotations_data.get('item_title', 'Unknown'))
         item_type = annotations_data.get('item_type', 'Unknown')
         item_id = annotations_data.get('item_id', 'Unknown')
         
@@ -331,7 +460,7 @@ class ZoteroLocalAPI:
         
         # Process each PDF attachment
         for attachment in annotations_data.get('attachments', []):
-            attachment_title = attachment.get('attachment_title', 'Unknown PDF')
+            attachment_title = self.normalize_text_encoding(attachment.get('attachment_title', 'Unknown PDF'))
             attachment_id = attachment.get('attachment_id', 'Unknown')
             filename = attachment.get('filename', 'Unknown')
             annotations = attachment.get('annotations', [])
@@ -353,8 +482,8 @@ class ZoteroLocalAPI:
             for i, annotation in enumerate(annotations, 1):
                 ann_data = annotation.get('data', {})
                 ann_type = ann_data.get('annotationType', 'unknown')
-                text = ann_data.get('annotationText', '')
-                comment = ann_data.get('annotationComment', '')
+                text = self.normalize_text_encoding(ann_data.get('annotationText', ''))
+                comment = self.normalize_text_encoding(ann_data.get('annotationComment', ''))
                 
                 # Get page number if available
                 page_label = ann_data.get('annotationPageLabel', '')
@@ -368,14 +497,17 @@ class ZoteroLocalAPI:
                 elif page_index:
                     zotero_link += f"?page={page_index + 1}"  # Page index is 0-based
                 
-                # Annotation header
-                page_info = f" (p. {page_label})" if page_label else f" (p. {page_index + 1})" if page_index else ""
-                org_content.append(f"*** {ann_type.capitalize()}{page_info}")
-                
-                # Annotation text
+                # Annotation text with citation
                 if text:
                     org_content.append(f"#+BEGIN_QUOTE")
                     org_content.append(text)
+                    
+                    # Add org-cite citation inside quote block
+                    if citation_key:
+                        page_info = page_label if page_label else str(page_index + 1) if page_index else "?"
+                        org_content.append("")  # Empty line before citation
+                        org_content.append(f"[cite:@{citation_key}, p.{page_info}]")
+                    
                     org_content.append(f"#+END_QUOTE")
                     org_content.append("")
                 
@@ -383,12 +515,38 @@ class ZoteroLocalAPI:
                 if comment:
                     org_content.append(f"*Comment:* {comment}")
                     org_content.append("")
-                
-                # Zotero link
-                org_content.append(f"[[{zotero_link}][Open in Zotero]]")
-                org_content.append("")
         
         return "\n".join(org_content)
+    
+    def get_citation_key_for_item(self, item_id: str, library_id: Optional[str] = None) -> Optional[str]:
+        """
+        Get the BibTeX citation key for a Zotero item by exporting it as BibTeX.
+        
+        Args:
+            item_id: Zotero item ID
+            library_id: Optional library ID for group libraries
+            
+        Returns:
+            BibTeX citation key or None if not found
+        """
+        try:
+            # Export the item as BibTeX
+            bibtex_data = self.export_item_bibtex(item_id, library_id)
+            if not bibtex_data:
+                return None
+            
+            # Parse the BibTeX to extract the citation key
+            import re
+            # Match @type{citation_key, ...
+            match = re.search(r'@\w+\s*{\s*([^,\s]+)\s*,', bibtex_data)
+            if match:
+                return match.group(1)
+            
+            return None
+            
+        except Exception as e:
+            print(f"Error getting citation key for item {item_id}: {e}")
+            return None
     
     def export_item_bibtex(self, item_id: str, library_id: Optional[str] = None) -> Optional[str]:
         """
@@ -403,9 +561,9 @@ class ZoteroLocalAPI:
         """
         try:
             if library_id:
-                url = f"{self.api_base}/groups/{library_id}/items/{item_id}?format=bibtex"
+                url = f"{self.base_url}/api/groups/{library_id}/items/{item_id}?format=bibtex"
             else:
-                url = f"{self.api_base}/users/0/items/{item_id}?format=bibtex"
+                url = f"{self.base_url}/api/users/0/items/{item_id}?format=bibtex"
             
             response = requests.get(url)
             if response.status_code == 200:
@@ -466,7 +624,15 @@ def main():
     
     # Handle org-mode output
     if org_mode:
-        org_content = api.format_as_org_mode(result)
+        # Get citation key for org-cite format
+        print("Getting citation key for org-cite format...")
+        citation_key = api.get_citation_key_for_item(item_id)
+        if citation_key:
+            print(f"Citation key: {citation_key}")
+        else:
+            print("Warning: Could not get citation key, links will be omitted")
+        
+        org_content = api.format_as_org_mode(result, citation_key)
         
         # Save to org file
         org_file = f"annotations_{item_id}.org"

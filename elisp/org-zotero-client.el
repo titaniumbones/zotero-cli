@@ -117,6 +117,24 @@
       (setq org-zotero--mapping-source bib-file)))
   (cdr (assoc citation-key org-zotero--citation-mapping)))
 
+(defun org-zotero-get-org-keywords (filepath)
+  "Get org-mode keywords from file (bibliography, cite_export, etc.).
+FILEPATH is the path to the org-mode file.
+Returns alist of keyword names to values."
+  (let ((keywords '()))
+    (condition-case err
+        (with-temp-buffer
+          (insert-file-contents filepath)
+          (goto-char (point-min))
+          (while (re-search-forward "^\\s-*#\\+\\([A-Z_]+\\):\\s-*\\(.+\\)\\s-*$" nil t)
+            (let ((keyword (upcase (match-string 1)))
+                  (value (string-trim (match-string 2))))
+              (push (cons keyword value) keywords)))
+          keywords)
+      (error
+       (message "Error reading file %s: %s" filepath (error-message-string err))
+       nil))))
+
 (defun org-zotero-extract-all-annotations-to-notes (&optional output-file)
   "Extract all annotations from citations in current buffer."
   (interactive)
@@ -156,18 +174,41 @@
             (message "Found %d annotations in %d PDFs" total-annotations (length attachments))
             
             (when (> total-annotations 0)
-              (let ((formatted (zotero-format-as-org-mode annotations-data)))
+              (let ((formatted (zotero-format-as-org-mode annotations-data citation-key))
+                    (source-keywords (org-zotero-get-org-keywords (buffer-file-name))))
                 (if output-file
                     (progn
                       (with-temp-file output-file
-                        (insert (format "#+TITLE: %s\n\n" title))
+                        (insert (format "#+TITLE: %s\n" title))
+                        ;; Include important org keywords from source file
+                        (let ((bibliography (cdr (assoc "BIBLIOGRAPHY" source-keywords)))
+                              (cite-export (cdr (assoc "CITE_EXPORT" source-keywords)))
+                              (library-id (or buffer-library-id (cdr (assoc "ZOTERO_LIBRARY_ID" source-keywords)))))
+                          (when bibliography
+                            (insert (format "#+BIBLIOGRAPHY: %s\n" bibliography)))
+                          (when cite-export
+                            (insert (format "#+CITE_EXPORT: %s\n" cite-export)))
+                          (when library-id
+                            (insert (format "#+ZOTERO_LIBRARY_ID: %s\n" library-id))))
+                        (insert "\n")
                         (insert formatted))
                       (message "✅ Annotations saved to: %s" output-file)
                       output-file)
                   (let ((notes-buffer (get-buffer-create "*Zotero Annotations*")))
                     (with-current-buffer notes-buffer
                       (erase-buffer)
-                      (insert (format "#+TITLE: %s\n\n" title))
+                      (insert (format "#+TITLE: %s\n" title))
+                      ;; Include important org keywords from source file
+                      (let ((bibliography (cdr (assoc "BIBLIOGRAPHY" source-keywords)))
+                            (cite-export (cdr (assoc "CITE_EXPORT" source-keywords)))
+                            (library-id (or buffer-library-id (cdr (assoc "ZOTERO_LIBRARY_ID" source-keywords)))))
+                        (when bibliography
+                          (insert (format "#+BIBLIOGRAPHY: %s\n" bibliography)))
+                        (when cite-export
+                          (insert (format "#+CITE_EXPORT: %s\n" cite-export)))
+                        (when library-id
+                          (insert (format "#+ZOTERO_LIBRARY_ID: %s\n" library-id))))
+                      (insert "\n")
                       (insert formatted)
                       (org-mode)
                       (goto-char (point-min)))

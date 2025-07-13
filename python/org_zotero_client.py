@@ -144,6 +144,31 @@ class OrgZoteroClient:
             print(f"Error reading file {filepath}: {e}")
             return None
     
+    def get_org_keywords(self, filepath: str) -> Dict[str, str]:
+        """
+        Get org-mode keywords from file (bibliography, cite_export, etc.).
+        
+        Args:
+            filepath: Path to org-mode file
+            
+        Returns:
+            Dictionary of keyword names to values
+        """
+        keywords = {}
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                for line in f:
+                    # Look for #+KEYWORD: value patterns
+                    match = re.match(r'^\s*#\+([A-Z_]+):\s*(.+)\s*$', line, re.IGNORECASE)
+                    if match:
+                        keyword = match.group(1).upper()
+                        value = match.group(2).strip()
+                        keywords[keyword] = value
+            return keywords
+        except IOError as e:
+            print(f"Error reading file {filepath}: {e}")
+            return {}
+    
     def build_citation_to_zotero_id_mapping(self, bib_file: str, library_id: Optional[str] = None) -> Dict[str, str]:
         """
         Build mapping from BibTeX citation keys to Zotero item IDs.
@@ -538,10 +563,13 @@ class OrgZoteroClient:
                     failed_items.append((citation_key, str(e)))
                     print(f"  ❌ Unexpected error: {e}")
             
+            # Get org keywords from source file
+            org_keywords = self.get_org_keywords(input_file)
+            
             # Generate comprehensive notes content
             notes_content = self._format_comprehensive_notes(
                 all_annotations, input_file, include_item_metadata, 
-                successful_items, failed_items, file_library_id
+                successful_items, failed_items, file_library_id, org_keywords
             )
             
             # Output handling
@@ -562,7 +590,7 @@ class OrgZoteroClient:
     def _format_comprehensive_notes(self, all_annotations: List[Dict], input_file: str,
                                   include_metadata: bool, successful_count: int, 
                                   failed_items: List[Tuple[str, str]], 
-                                  library_id: Optional[str]) -> str:
+                                  library_id: Optional[str], org_keywords: Dict[str, str]) -> str:
         """
         Format all collected annotations into a comprehensive notes document.
         
@@ -581,12 +609,20 @@ class OrgZoteroClient:
         
         content = []
         
-        # Header
+        # Header with org keywords from source file
         content.append("#+TITLE: Comprehensive Annotations")
         content.append(f"#+DATE: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         content.append(f"#+SOURCE: {input_file}")
+        
+        # Include important org keywords from source file
+        if 'BIBLIOGRAPHY' in org_keywords:
+            content.append(f"#+BIBLIOGRAPHY: {org_keywords['BIBLIOGRAPHY']}")
+        if 'CITE_EXPORT' in org_keywords:
+            content.append(f"#+CITE_EXPORT: {org_keywords['CITE_EXPORT']}")
         if library_id:
             content.append(f"#+ZOTERO_LIBRARY_ID: {library_id}")
+        elif 'ZOTERO_LIBRARY_ID' in org_keywords:
+            content.append(f"#+ZOTERO_LIBRARY_ID: {org_keywords['ZOTERO_LIBRARY_ID']}")
         content.append("")
         
         # Summary
