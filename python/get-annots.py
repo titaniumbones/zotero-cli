@@ -478,7 +478,10 @@ class ZoteroLocalAPI:
                 org_content.append("")
                 continue
             
-            # Process each annotation
+            # Collect all annotation texts first
+            annotation_texts = []
+            comments = []
+            
             for i, annotation in enumerate(annotations, 1):
                 ann_data = annotation.get('data', {})
                 ann_type = ann_data.get('annotationType', 'unknown')
@@ -497,24 +500,32 @@ class ZoteroLocalAPI:
                 elif page_index:
                     zotero_link += f"?page={page_index + 1}"  # Page index is 0-based
                 
-                # Annotation text with citation
+                # Collect annotation text with citation
                 if text:
-                    org_content.append(f"#+BEGIN_QUOTE")
-                    org_content.append(text)
+                    annotation_text = text
                     
-                    # Add org-cite citation inside quote block
+                    # Add org-cite citation
                     if citation_key:
                         page_info = page_label if page_label else str(page_index + 1) if page_index else "?"
-                        org_content.append("")  # Empty line before citation
-                        org_content.append(f"[cite:@{citation_key}, p.{page_info}]")
+                        annotation_text += f"\n\n[cite:@{citation_key}, p.{page_info}]"
                     
-                    org_content.append(f"#+END_QUOTE")
-                    org_content.append("")
+                    annotation_texts.append(annotation_text)
                 
-                # Annotation comment
+                # Collect annotation comment
                 if comment:
-                    org_content.append(f"*Comment:* {comment}")
-                    org_content.append("")
+                    comments.append(f"*Comment:* {comment}")
+            
+            # Add single quote block for all annotations from this PDF
+            if annotation_texts:
+                org_content.append(f"#+BEGIN_QUOTE")
+                org_content.append("\n\n".join(annotation_texts))
+                org_content.append(f"#+END_QUOTE")
+                org_content.append("")
+            
+            # Add comments after the quote block
+            if comments:
+                org_content.extend(comments)
+                org_content.append("")
         
         return "\n".join(org_content)
     

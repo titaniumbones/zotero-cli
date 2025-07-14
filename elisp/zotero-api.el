@@ -392,50 +392,61 @@ CITATION-KEY is optional BibTeX citation key for org-cite format."
                   (push "   No annotations found." org-content)
                   (push "" org-content))
               
-              ;; Process each annotation
-              (dolist (annotation annotations)
-                (let* ((ann-data (cdr (assq 'data annotation)))
-                       (ann-type (or (cdr (assq 'annotationType ann-data)) "unknown"))
-                       (text (zotero-normalize-text-encoding (cdr (assq 'annotationText ann-data))))
-                       (comment (zotero-normalize-text-encoding (cdr (assq 'annotationComment ann-data))))
-                       (page-label (cdr (assq 'annotationPageLabel ann-data)))
-                       (position (cdr (assq 'annotationPosition ann-data)))
-                       (page-index (when (and position (listp position))
-                                     (cdr (assq 'pageIndex position))))
-                       ;; Create Zotero link
-                       (zotero-link (concat "zotero://select/library/items/" attachment-id))
-                       (page-info ""))
-                  
-                  ;; Add page parameter to link if available
-                  (cond
-                   (page-label
-                    (setq zotero-link (concat zotero-link "?page=" page-label))
-                    (setq page-info (format " (p. %s)" page-label)))
-                   ((and page-index (numberp page-index))
-                    (setq zotero-link (concat zotero-link "?page=" (number-to-string (1+ page-index))))
-                    (setq page-info (format " (p. %d)" (1+ page-index)))))
-                  
-                  ;; Annotation text with citation
-                  (when (and text (not (string-empty-p text)))
-                    (push "#+BEGIN_QUOTE" org-content)
-                    (push text org-content)
+              ;; Collect all annotation texts first
+              (let ((annotation-texts '())
+                    (comments '()))
+                
+                (dolist (annotation annotations)
+                  (let* ((ann-data (cdr (assq 'data annotation)))
+                         (ann-type (or (cdr (assq 'annotationType ann-data)) "unknown"))
+                         (text (zotero-normalize-text-encoding (cdr (assq 'annotationText ann-data))))
+                         (comment (zotero-normalize-text-encoding (cdr (assq 'annotationComment ann-data))))
+                         (page-label (cdr (assq 'annotationPageLabel ann-data)))
+                         (position (cdr (assq 'annotationPosition ann-data)))
+                         (page-index (when (and position (listp position))
+                                       (cdr (assq 'pageIndex position))))
+                         ;; Create Zotero link
+                         (zotero-link (concat "zotero://select/library/items/" attachment-id))
+                         (page-info ""))
                     
-                    ;; Add org-cite citation inside quote block
-                    (when citation-key
-                      (let ((page-ref (cond
-                                       (page-label page-label)
-                                       ((and page-index (numberp page-index)) (number-to-string (1+ page-index)))
-                                       (t "?"))))
-                        (push "" org-content)  ; Empty line before citation
-                        (push (format "[cite:@%s, p.%s]" citation-key page-ref) org-content)))
+                    ;; Add page parameter to link if available
+                    (cond
+                     (page-label
+                      (setq zotero-link (concat zotero-link "?page=" page-label))
+                      (setq page-info (format " (p. %s)" page-label)))
+                     ((and page-index (numberp page-index))
+                      (setq zotero-link (concat zotero-link "?page=" (number-to-string (1+ page-index))))
+                      (setq page-info (format " (p. %d)" (1+ page-index)))))
                     
-                    (push "#+END_QUOTE" org-content)
-                    (push "" org-content))
-                  
-                  ;; Annotation comment
-                  (when (and comment (not (string-empty-p comment)))
-                    (push (format "*Comment:* %s" comment) org-content)
-                    (push "" org-content)))))))
+                    ;; Collect annotation text with citation
+                    (when (and text (not (string-empty-p text)))
+                      (let ((annotation-text text))
+                        ;; Add org-cite citation
+                        (when citation-key
+                          (let ((page-ref (cond
+                                           (page-label page-label)
+                                           ((and page-index (numberp page-index)) (number-to-string (1+ page-index)))
+                                           (t "?"))))
+                            (setq annotation-text (concat annotation-text "\n\n" (format "[cite:@%s, p.%s]" citation-key page-ref)))))
+                        
+                        (push annotation-text annotation-texts)))
+                    
+                    ;; Collect annotation comment
+                    (when (and comment (not (string-empty-p comment)))
+                      (push (format "*Comment:* %s" comment) comments))))
+                
+                ;; Add single quote block for all annotations from this PDF
+                (when annotation-texts
+                  (push "#+BEGIN_QUOTE" org-content)
+                  (push (mapconcat 'identity (nreverse annotation-texts) "\n\n") org-content)
+                  (push "#+END_QUOTE" org-content)
+                  (push "" org-content))
+                
+                ;; Add comments after the quote block
+                (when comments
+                  (dolist (comment (nreverse comments))
+                    (push comment org-content))
+                  (push "" org-content))))))
         
         (mapconcat 'identity (nreverse org-content) "\n")))))
 
