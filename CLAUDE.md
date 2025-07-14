@@ -60,6 +60,18 @@ python get-annots.py <item_id>
 # Get annotations in org-mode format  
 python get-annots.py <item_id> --org
 
+# Extract all annotations from a collection
+python get-collection-annots.py <collection_id>
+
+# Extract collection annotations in org-mode format
+python get-collection-annots.py <collection_id> --org
+
+# Extract from group library collection
+python get-collection-annots.py <collection_id> --library-id <library_id> --org
+
+# Save to specific file
+python get-collection-annots.py <collection_id> --output my_collection.org --org
+
 # Explore libraries and collections
 python list-libraries.py
 
@@ -70,18 +82,41 @@ python find-items-with-pdfs.py
 python debug-annotations.py <item_id>
 ```
 
+#### Collection Annotation Examples
+
+```bash
+# Extract all annotations from "Research Papers" collection in personal library
+python get-collection-annots.py ABC123DEF --org
+
+# Extract from group library collection with custom output file
+python get-collection-annots.py XYZ789GHI --library-id 12345 --output research_notes.org --org
+
+# Get JSON output for programmatic processing
+python get-collection-annots.py ABC123DEF --library-id 12345 --output collection_data.json
+```
+
 ### Emacs Lisp Implementation
 
 #### Interactive Usage (within Emacs)
 ```elisp
-;; Load the package
-(require 'zotero-package)
+;; Load the packages
+(require 'zotero-api)
+(require 'org-zotero-client)
 
 ;; Get annotations for an item
-(zotero-get-annotations-for-item "ITEM_ID")
+(zotero-get-all-annotations-for-item "ITEM_ID")
 
 ;; Insert annotations at point
 (zotero-insert-item-annotations "ITEM_ID")
+
+;; Extract collection annotations interactively (with prompts for library/collection selection)
+(org-zotero-extract-collection-annotations-interactive)
+
+;; Extract collection annotations directly
+(org-zotero-extract-collection-annotations "COLLECTION_ID")
+
+;; Extract from group library collection
+(org-zotero-extract-collection-annotations "COLLECTION_ID" "LIBRARY_ID")
 
 ;; Browse libraries
 (zotero-browse-libraries)
@@ -89,8 +124,24 @@ python debug-annotations.py <item_id>
 ;; Browse items
 (zotero-browse-items)
 
-;; Find items with PDFs
-(zotero-find-items-with-pdfs)
+;; Select library interactively
+(org-zotero-select-library)
+
+;; Select collection from library
+(org-zotero-select-collection "LIBRARY_ID")
+```
+
+#### Collection Annotation Workflow Examples
+
+```elisp
+;; Interactive workflow - prompts for everything
+M-x org-zotero-extract-collection-annotations-interactive
+
+;; Direct extraction to specific file
+(org-zotero-extract-collection-annotations "ABC123DEF" nil "~/research/my-collection.org")
+
+;; Extract from group library with interactive file selection
+(org-zotero-extract-collection-annotations "XYZ789GHI" "12345")
 ```
 
 #### Command-line Usage (batch mode)
@@ -167,6 +218,12 @@ The `ZoteroLocalAPI` class now includes:
 - `get_attachment_annotations(attachment_id)` - Get annotations from attachment
 - `get_all_annotations_for_item(item_id)` - Get all annotations for item
 - `format_as_org_mode(annotations_data)` - Format annotations as org-mode text
+
+**Collection Annotation Management:**
+- `get_collection_items(collection_id, library_id=None, limit=100)` - Get items from a collection
+- `get_collection_info(collection_id, library_id=None)` - Get collection metadata
+- `get_all_collection_annotations(collection_id, library_id=None)` - Get all annotations from all items in a collection
+- `format_collection_annotations_as_org(collection_data)` - Format collection annotations as org-mode text
 
 ### Testing Scripts
 

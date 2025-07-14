@@ -573,6 +573,157 @@ class ZoteroLocalAPI:
                 
         except Exception as e:
             return None
+    
+    def get_collection_items(self, collection_id: str, library_id: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+        """
+        Get all items from a specific collection
+        
+        Args:
+            collection_id: Zotero collection ID
+            library_id: Library/group ID (if None, uses personal library)
+            limit: Maximum number of items to return (default: 100)
+            
+        Returns:
+            List of item dictionaries from the collection
+        """
+        params = f"?limit={limit}"
+        
+        if library_id:
+            response = self._make_request(f"/api/groups/{library_id}/collections/{collection_id}/items{params}")
+        else:
+            response = self._make_request(f"/api/users/0/collections/{collection_id}/items{params}")
+        
+        # Zotero API returns data directly as a list
+        if response and isinstance(response, list):
+            return response
+        return []
+    
+    def get_collection_info(self, collection_id: str, library_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """
+        Get information about a specific collection
+        
+        Args:
+            collection_id: Zotero collection ID
+            library_id: Library/group ID (if None, uses personal library)
+            
+        Returns:
+            Collection information dictionary, or None if not found
+        """
+        if library_id:
+            response = self._make_request(f"/api/groups/{library_id}/collections/{collection_id}")
+        else:
+            response = self._make_request(f"/api/users/0/collections/{collection_id}")
+        
+        if response and isinstance(response, dict):
+            return response
+        return None
+    
+    def get_all_collection_annotations(self, collection_id: str, library_id: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Get all annotations from all items in a collection
+        
+        Args:
+            collection_id: Zotero collection ID
+            library_id: Library/group ID (if None, uses personal library)
+            
+        Returns:
+            Dictionary containing collection info and all annotations organized by item
+        """
+        # Get collection information
+        collection_info = self.get_collection_info(collection_id, library_id)
+        if not collection_info:
+            return {"error": f"Collection {collection_id} not found"}
+        
+        # Get all items in the collection
+        collection_items = self.get_collection_items(collection_id, library_id, limit=1000)
+        
+        result = {
+            "collection_id": collection_id,
+            "collection_name": collection_info.get('data', {}).get('name', 'Unknown'),
+            "collection_parent": collection_info.get('data', {}).get('parentCollection', None),
+            "library_id": library_id,
+            "items_count": len(collection_items),
+            "items": []
+        }
+        
+        # Process each item in the collection
+        for item in collection_items:
+            item_id = item['key']
+            item_data = item.get('data', {})
+            item_type = item_data.get('itemType', 'unknown')
+            
+            # Skip attachments and annotations - we only want top-level items
+            if item_type in ['attachment', 'note', 'annotation']:
+                continue
+            
+            # Get annotations for this item
+            item_annotations = self.get_all_annotations_for_item(item_id, library_id)
+            
+            # Only include items that have annotations
+            if "error" not in item_annotations and item_annotations.get('attachments'):
+                total_annotations = sum(att['annotations_count'] for att in item_annotations['attachments'])
+                if total_annotations > 0:
+                    result["items"].append(item_annotations)
+        
+        return result
+    
+    def format_collection_annotations_as_org(self, collection_data: Dict[str, Any]) -> str:
+        """
+        Format collection annotation data as org-mode text
+        
+        Args:
+            collection_data: Result from get_all_collection_annotations
+            
+        Returns:
+            Formatted org-mode string
+        """
+        if "error" in collection_data:
+            return f"# Error: {collection_data['error']}\n"
+        
+        org_content = []
+        
+        # Main collection header
+        collection_name = self.normalize_text_encoding(collection_data.get('collection_name', 'Unknown'))
+        collection_id = collection_data.get('collection_id', 'Unknown')
+        library_id = collection_data.get('library_id', 'Personal Library')
+        items_count = collection_data.get('items_count', 0)
+        items_with_annotations = len(collection_data.get('items', []))
+        
+        org_content.append(f"* Collection: {collection_name}")
+        org_content.append(f"  :PROPERTIES:")
+        org_content.append(f"  :COLLECTION_ID: {collection_id}")
+        if library_id:
+            org_content.append(f"  :LIBRARY_ID: {library_id}")
+        org_content.append(f"  :TOTAL_ITEMS: {items_count}")
+        org_content.append(f"  :ITEMS_WITH_ANNOTATIONS: {items_with_annotations}")
+        org_content.append(f"  :END:")
+        org_content.append("")
+        
+        if not collection_data.get('items'):
+            org_content.append("No items with annotations found in this collection.")
+            org_content.append("")
+            return "\n".join(org_content)
+        
+        # Process each item with annotations
+        for item_data in collection_data['items']:
+            # Get citation key for org-cite format
+            citation_key = self.get_citation_key_for_item(item_data['item_id'], library_id)
+            
+            # Format item annotations (use existing function but at sub-level)
+            item_org = self.format_as_org_mode(item_data, citation_key)
+            
+            # Adjust heading levels (add one * to each heading)
+            adjusted_lines = []
+            for line in item_org.split('\n'):
+                if line.startswith('*'):
+                    adjusted_lines.append('*' + line)
+                else:
+                    adjusted_lines.append(line)
+            
+            org_content.extend(adjusted_lines)
+            org_content.append("")
+        
+        return "\n".join(org_content)
 
 
 def main():

@@ -531,10 +531,10 @@ COLLECTION-ID is the Zotero collection ID.
 LIBRARY-ID is the library/group ID (nil for personal library).
 LIMIT is the maximum number of items to return (default 100)."
   (let* ((limit (or limit 100))
-         (params (format "?collection=%s&limit=%d" collection-id limit))
+         (params (format "?limit=%d" limit))
          (endpoint (if library-id
-                       (format "/groups/%s/items%s" library-id params)
-                     (format "/users/%s/items%s" zotero-default-user-id params))))
+                       (format "/groups/%s/collections/%s/items%s" library-id collection-id params)
+                     (format "/users/%s/collections/%s/items%s" zotero-default-user-id collection-id params))))
     (let ((response (zotero--make-request endpoint)))
       (if (vectorp response) (append response nil) response))))
 
@@ -567,17 +567,12 @@ Returns an alist containing collection info and all annotations organized by ite
         (dolist (item collection-items)
           (let* ((item-id (cdr (assq 'key item)))
                  (item-data (cdr (assq 'data item)))
-                 (item-type (cdr (assq 'itemType item-data)))
-                 (item-title (or (cdr (assq 'title item-data)) "Unknown")))
-            
-            (message "Processing item: %s (%s)" item-title item-type)
+                 (item-type (cdr (assq 'itemType item-data))))
             
             ;; Skip attachments and annotations - we only want top-level items
             (unless (member item-type '("attachment" "note" "annotation"))
-              (message "Getting annotations for item: %s" item-id)
               ;; Get annotations for this item
               (let ((item-annotations (zotero-get-all-annotations-for-item item-id library-id)))
-                (message "Got annotations result for %s" item-id)
                 ;; Only include items that have annotations
                 (when (and (not (assq 'error item-annotations))
                            (cdr (assq 'attachments item-annotations)))
@@ -585,7 +580,6 @@ Returns an alist containing collection info and all annotations organized by ite
                     (dolist (attachment (cdr (assq 'attachments item-annotations)))
                       (setq total-annotations (+ total-annotations (cdr (assq 'annotations-count attachment)))))
                     (when (> total-annotations 0)
-                      (message "Found %d annotations for %s" total-annotations item-title)
                       (push item-annotations items-with-annotations))))))))
         
         (list (cons 'collection-id collection-id)
