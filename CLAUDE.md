@@ -45,7 +45,7 @@ Core API client with methods for:
 - Filtering PDF attachments
 - Retrieving annotations from attachments
 - Aggregating all annotations for an item
-- Formatting annotations as org-mode text
+- Formatting annotations as org-mode or markdown text
 
 ## Development Commands
 
@@ -59,6 +59,9 @@ python get-annots.py <item_id>
 
 # Get annotations in org-mode format  
 python get-annots.py <item_id> --org
+
+# Get annotations in markdown format
+python get-annots.py <item_id> --markdown
 
 # Extract all annotations from a collection
 python get-collection-annots.py <collection_id>
@@ -106,8 +109,17 @@ python get-collection-annots.py ABC123DEF --library-id 12345 --output collection
 ;; Get annotations for an item
 (zotero-get-all-annotations-for-item "ITEM_ID")
 
-;; Insert annotations at point
+;; Insert annotations at point (org-mode format)
 (zotero-insert-item-annotations "ITEM_ID")
+
+;; Insert annotations at point (markdown format)
+(zotero-insert-item-annotations-markdown "ITEM_ID")
+
+;; Save annotations to file (org-mode format)
+(zotero-save-item-annotations-to-file "ITEM_ID" "output.org")
+
+;; Save annotations to file (markdown format)
+(zotero-save-item-annotations-to-markdown-file "ITEM_ID" "output.md")
 
 ;; Extract collection annotations interactively (with prompts for library/collection selection)
 (org-zotero-extract-collection-annotations-interactive)
@@ -273,6 +285,57 @@ The `ZoteroLocalAPI` class now includes:
   - Text highlights (with color and text content)
   - Freeform notes
   - Ink/drawing annotations
+
+## Elisp Code Formatting (MANDATORY AFTER EVERY CHANGE TO ELISP DIRECTORY)
+
+**CRITICAL**: After EVERY code change, you MUST format the code before running tests. The formatter is NEVER wrong - if code looks wrongly formatted after running it, it's ALWAYS because of a mistake in the code.
+
+```bash
+# Format all Elisp files - RUN THIS AFTER EVERY CHANGE
+Emacs -batch --eval "(progn (setq indent-tabs-mode nil) (dolist (file (directory-files \".\" t \"\\\\.el$\")) (find-file file) (setq indent-tabs-mode nil) (indent-region (point-min) (point-max)) (save-buffer) (kill-buffer)))"
+
+# Alternative: Format a specific file
+Emacs -batch --eval "(progn (find-file \"./elisp/org-zotero-client.el\") (setq indent-tabs-mode nil) (indent-region (point-min) (point-max)) (save-buffer))"
+
+# Remove trailing whitespaces from all Elisp files
+Emacs -batch --eval "(progn (dolist (file (directory-files \".\" t \"\\\\.el$\")) (find-file file) (delete-trailing-whitespace) (save-buffer) (kill-buffer)))"
+```
+
+**Debugging Syntax Errors**: If files fail to load due to syntax errors (missing parentheses, quotes, etc.), the formatter's indentation will reveal the problem:
+1. Run the formatter on the broken file
+2. Look for incorrectly indented lines - they indicate where parentheses/quotes are unbalanced
+3. The formatter's indentation is ALWAYS correct, so trust it to find your syntax errors
+
+**Trailing Whitespaces**: All code must be free of trailing whitespaces (spaces or tabs at the end of lines). Use the command above or configure your editor to automatically remove them on save.
+
+
+### Self reference in code or commits
+
+- **Important - Never self-reference in code or commits**: Do not mention Claude or include any self-referential messages in code or commit messages. Keep all content strictly professional and focused on the technical aspects.
+
+## Linting and Code Quality (RUN AFTER FORMATTING)
+
+**IMPORTANT**: After formatting your code, you MUST check for linting errors. Ignore "Cannot open load file" errors for dependencies.
+
+
+```bash
+# Run linting checks - RUN THIS AFTER FORMATTING
+# Check byte-compilation warnings (excluding dependency errors)
+emacs -batch -f batch-byte-compile *.el 2>&1 | grep -v "Cannot open load file" | grep -v "No such file or directory" | grep -E "(Warning|Error)"
+
+# Check documentation strings
+emacs -batch --eval "(progn (dolist (file (directory-files \".\" t \"\\\\.el$\")) (find-file file) (condition-case err (checkdoc-current-buffer t) (error (message \"Checkdoc error in %s: %s\" file err))) (kill-buffer)))"
+
+# Check for specific warnings (useful for CI/CD)
+emacs -batch -f batch-byte-compile *.el 2>&1 | grep -v "Cannot open load file" | grep -v "No such file or directory" | grep -v "clang-include-fixer.el" | grep -E "(Warning|Error)" && echo "Linting errors found!" && exit 1 || echo "No linting errors found"
+```
+
+**Common Linting Errors to Fix**:
+- **Undefined functions/variables**: Add proper `require` statements or `declare-function`
+- **Missing or incorrect docstrings**: Follow Emacs docstring conventions (first line < 80 chars, end with period)
+- **Free variables**: Properly declare or bind all variables
+- **Lexical binding**: Files should start with `;;; -*- lexical-binding: t -*-`
+- **Obsolete functions**: Replace deprecated functions with modern alternatives
 
 ## Development Principles
 

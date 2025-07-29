@@ -450,6 +450,104 @@ CITATION-KEY is optional BibTeX citation key for org-cite format."
         
         (mapconcat 'identity (nreverse org-content) "\n")))))
 
+(defun zotero-format-as-markdown (annotations-data &optional citation-key)
+  "Format ANNOTATIONS-DATA as markdown text.
+ANNOTATIONS-DATA should be the result from `zotero-get-all-annotations-for-item'.
+CITATION-KEY is optional BibTeX citation key for citations."
+  (let ((error-msg (cdr (assq 'error annotations-data))))
+    (if error-msg
+        (format "# Error: %s\n" error-msg)
+      
+      (let* ((item-title (zotero-normalize-text-encoding (cdr (assq 'item-title annotations-data))))
+             (item-type (cdr (assq 'item-type annotations-data)))
+             (item-id (cdr (assq 'item-id annotations-data)))
+             (attachments (cdr (assq 'attachments annotations-data)))
+             (md-content '()))
+        
+        ;; Main header with item info
+        (push (format "# %s" item-title) md-content)
+        (push "" md-content)
+        (push (format "**Item Type:** %s" item-type) md-content)
+        (push (format "**Zotero Key:** %s" item-id) md-content)
+        (push "" md-content)
+        
+        ;; Process each PDF attachment
+        (dolist (attachment attachments)
+          (let* ((attachment-title (zotero-normalize-text-encoding (cdr (assq 'attachment-title attachment))))
+                 (attachment-id (cdr (assq 'attachment-id attachment)))
+                 (filename (cdr (assq 'filename attachment)))
+                 (annotations (cdr (assq 'annotations attachment))))
+            
+            ;; PDF header
+            (push (format "## %s" attachment-title) md-content)
+            (push "" md-content)
+            (push (format "**Attachment ID:** %s" attachment-id) md-content)
+            (push (format "**Filename:** %s" filename) md-content)
+            (push "" md-content)
+            
+            (if (null annotations)
+                (progn
+                  (push "No annotations found." md-content)
+                  (push "" md-content))
+              
+              ;; Collect all annotation texts first
+              (let ((annotation-texts '())
+                    (comments '()))
+                
+                (dolist (annotation annotations)
+                  (let* ((ann-data (cdr (assq 'data annotation)))
+                         (ann-type (or (cdr (assq 'annotationType ann-data)) "unknown"))
+                         (text (zotero-normalize-text-encoding (cdr (assq 'annotationText ann-data))))
+                         (comment (zotero-normalize-text-encoding (cdr (assq 'annotationComment ann-data))))
+                         (page-label (cdr (assq 'annotationPageLabel ann-data)))
+                         (position (cdr (assq 'annotationPosition ann-data)))
+                         (page-index (when (and position (listp position))
+                                       (cdr (assq 'pageIndex position))))
+                         ;; Create Zotero link
+                         (zotero-link (concat "zotero://select/library/items/" attachment-id))
+                         (page-info ""))
+                    
+                    ;; Add page parameter to link if available
+                    (cond
+                     (page-label
+                      (setq zotero-link (concat zotero-link "?page=" page-label))
+                      (setq page-info (format " (p. %s)" page-label)))
+                     ((and page-index (numberp page-index))
+                      (setq zotero-link (concat zotero-link "?page=" (number-to-string (1+ page-index))))
+                      (setq page-info (format " (p. %d)" (1+ page-index)))))
+                    
+                    ;; Collect annotation text with citation
+                    (when (and text (not (string-empty-p text)))
+                      (let ((annotation-text text))
+                        ;; Add citation
+                        (when citation-key
+                          (let ((page-ref (cond
+                                           (page-label page-label)
+                                           ((and page-index (numberp page-index)) (number-to-string (1+ page-index)))
+                                           (t "?"))))
+                            (setq annotation-text (concat annotation-text "\n\n" (format "[cite:@%s, p.%s]" citation-key page-ref)))))
+                        
+                        (push annotation-text annotation-texts)))
+                    
+                    ;; Collect annotation comment
+                    (when (and comment (not (string-empty-p comment)))
+                      (push (format "**Comment:** %s" comment) comments))))
+                
+                ;; Add single quote block for all annotations from this PDF
+                (when annotation-texts
+                  (push "::: .quote" md-content)
+                  (push (mapconcat 'identity (nreverse annotation-texts) "\n\n") md-content)
+                  (push ":::" md-content)
+                  (push "" md-content))
+                
+                ;; Add comments after the quote block
+                (when comments
+                  (dolist (comment (nreverse comments))
+                    (push comment md-content))
+                  (push "" md-content))))))
+        
+        (mapconcat 'identity (nreverse md-content) "\n")))))
+
 ;;; Interactive functions
 
 ;;;###autoload
@@ -468,6 +566,24 @@ CITATION-KEY is optional BibTeX citation key for org-cite format."
          (org-content (zotero-format-as-org-mode annotations-data)))
     (with-temp-file filename
       (insert org-content))
+    (message "Annotations saved to %s" filename)))
+
+;;;###autoload
+(defun zotero-insert-item-annotations-markdown (item-id)
+  "Insert annotations for ITEM-ID at point in markdown format."
+  (interactive "sZotero Item ID: ")
+  (let* ((annotations-data (zotero-get-all-annotations-for-item item-id))
+         (md-content (zotero-format-as-markdown annotations-data)))
+    (insert md-content)))
+
+;;;###autoload
+(defun zotero-save-item-annotations-to-markdown-file (item-id filename)
+  "Save annotations for ITEM-ID to FILENAME in markdown format."
+  (interactive "sZotero Item ID: \nFSave to file: ")
+  (let* ((annotations-data (zotero-get-all-annotations-for-item item-id))
+         (md-content (zotero-format-as-markdown annotations-data)))
+    (with-temp-file filename
+      (insert md-content))
     (message "Annotations saved to %s" filename)))
 
 ;;;###autoload
@@ -649,6 +765,55 @@ Returns formatted org-mode string."
               (push "" org-content))))
         
         (mapconcat 'identity (nreverse org-content) "\n")))))
+
+(defun zotero-format-collection-annotations-as-markdown (collection-data)
+  "Format collection annotation data as markdown text.
+COLLECTION-DATA should be the result from `zotero-get-all-collection-annotations'.
+Returns formatted markdown string."
+  (let ((error-msg (cdr (assq 'error collection-data))))
+    (if error-msg
+        (format "# Error: %s\n" error-msg)
+      
+      (let* ((collection-name (zotero-normalize-text-encoding (cdr (assq 'collection-name collection-data))))
+             (collection-id (cdr (assq 'collection-id collection-data)))
+             (library-id (cdr (assq 'library-id collection-data)))
+             (items-count (cdr (assq 'items-count collection-data)))
+             (items (cdr (assq 'items collection-data)))
+             (items-with-annotations (length items))
+             (md-content '()))
+        
+        ;; Main collection header
+        (push (format "# Collection: %s" collection-name) md-content)
+        (push "" md-content)
+        (push (format "**Collection ID:** %s" collection-id) md-content)
+        (when library-id
+          (push (format "**Library ID:** %s" library-id) md-content))
+        (push (format "**Total Items:** %d" items-count) md-content)
+        (push (format "**Items with Annotations:** %d" items-with-annotations) md-content)
+        (push "" md-content)
+        
+        (if (null items)
+            (progn
+              (push "No items with annotations found in this collection." md-content)
+              (push "" md-content))
+          
+          ;; Process each item with annotations
+          (dolist (item-data items)
+            ;; Get citation key for citations
+            (let* ((item-id (cdr (assq 'item-id item-data)))
+                   (citation-key (zotero-get-citation-key-for-item item-id library-id))
+                   ;; Format item annotations (use existing function but at sub-level)
+                   (item-md (zotero-format-as-markdown item-data citation-key)))
+              
+              ;; Adjust heading levels (add one # to each heading)
+              (dolist (line (split-string item-md "\n"))
+                (if (string-prefix-p "#" line)
+                    (push (concat "#" line) md-content)
+                  (push line md-content)))
+              
+              (push "" md-content))))
+        
+        (mapconcat 'identity (nreverse md-content) "\n")))))
 
 (provide 'zotero-api)
 

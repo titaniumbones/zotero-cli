@@ -151,70 +151,87 @@ Returns alist of keyword names to values."
           (message "Cancelled by user")
           (cl-return-from org-zotero-extract-all-annotations-to-notes nil)))
       
-      (let ((citation-key (substring-no-properties (nth 2 (car citations))))
-            (zotero-id nil))
-        (message "Processing citation: %s" citation-key)
-        (setq zotero-id (org-zotero-resolve-citation-key citation-key buffer-library-id))
+      (let ((all-formatted-content "")
+            (total-items-processed 0)
+            (total-annotations-found 0)
+            (source-keywords (org-zotero-get-org-keywords (buffer-file-name))))
         
-        (if (not zotero-id)
-            (message "Citation key '%s' not found" citation-key)
+        ;; Process each citation
+        (dolist (citation citations)
+          (let* ((citation-key (substring-no-properties (nth 2 citation)))
+                 (zotero-id (org-zotero-resolve-citation-key citation-key buffer-library-id)))
+            
+            (message "Processing citation: %s" citation-key)
+            
+            (if (not zotero-id)
+                (message "Citation key '%s' not found" citation-key)
+              
+              (message "Resolved: %s → %s" citation-key zotero-id)
+              (let* ((item-data (zotero-get-item zotero-id buffer-library-id))
+                     (title (or (cdr (assq 'title (cdr (assq 'data item-data)))) "Unknown Title"))
+                     (annotations-data (zotero-get-all-annotations-for-item zotero-id buffer-library-id))
+                     (attachments (cdr (assq 'attachments annotations-data)))
+                     (item-annotation-count 0))
+                
+                (dolist (attachment attachments)
+                  (let ((count (cdr (assq 'annotations-count attachment))))
+                    (when count
+                      (setq item-annotation-count (+ item-annotation-count count)))))
+                
+                (message "Found %d annotations in %d PDFs for '%s'" item-annotation-count (length attachments) title)
+                
+                (when (> item-annotation-count 0)
+                  (let ((formatted (zotero-format-as-org-mode annotations-data citation-key)))
+                    (setq all-formatted-content (concat all-formatted-content formatted "\n"))
+                    (setq total-annotations-found (+ total-annotations-found item-annotation-count))))
+                
+                (setq total-items-processed (+ total-items-processed 1))))))
+        
+        (message "Processed %d items, found %d total annotations" total-items-processed total-annotations-found)
+        
+        (if (= total-annotations-found 0)
+            (message "No annotations found in any cited items")
           
-          (message "Resolved: %s → %s" citation-key zotero-id)
-          (let* ((item-data (zotero-get-item zotero-id buffer-library-id))
-                 (title (or (cdr (assq 'title (cdr (assq 'data item-data)))) "Unknown Title"))
-                 (annotations-data (zotero-get-all-annotations-for-item zotero-id buffer-library-id))
-                 (attachments (cdr (assq 'attachments annotations-data)))
-                 (total-annotations 0))
+          (if output-file
+              (progn
+                (with-temp-file output-file
+                  (insert "#+TITLE: All Annotations from Citations\n")
+                  ;; Include important org keywords from source file
+                  (let ((bibliography (cdr (assoc "BIBLIOGRAPHY" source-keywords)))
+                        (cite-export (cdr (assoc "CITE_EXPORT" source-keywords)))
+                        (library-id (or buffer-library-id (cdr (assoc "ZOTERO_LIBRARY_ID" source-keywords)))))
+                    (when bibliography
+                      (insert (format "#+BIBLIOGRAPHY: %s\n" bibliography)))
+                    (when cite-export
+                      (insert (format "#+CITE_EXPORT: %s\n" cite-export)))
+                    (when library-id
+                      (insert (format "#+ZOTERO_LIBRARY_ID: %s\n" library-id))))
+                  (insert "\n")
+                  (insert all-formatted-content))
+                (message "✅ Annotations from %d items saved to: %s" total-items-processed output-file)
+                output-file)
             
-            (dolist (attachment attachments)
-              (let ((count (cdr (assq 'annotations-count attachment))))
-                (when count
-                  (setq total-annotations (+ total-annotations count)))))
-            
-            (message "Found %d annotations in %d PDFs" total-annotations (length attachments))
-            
-            (when (> total-annotations 0)
-              (let ((formatted (zotero-format-as-org-mode annotations-data citation-key))
-                    (source-keywords (org-zotero-get-org-keywords (buffer-file-name))))
-                (if output-file
-                    (progn
-                      (with-temp-file output-file
-                        (insert (format "#+TITLE: %s\n" title))
-                        ;; Include important org keywords from source file
-                        (let ((bibliography (cdr (assoc "BIBLIOGRAPHY" source-keywords)))
-                              (cite-export (cdr (assoc "CITE_EXPORT" source-keywords)))
-                              (library-id (or buffer-library-id (cdr (assoc "ZOTERO_LIBRARY_ID" source-keywords)))))
-                          (when bibliography
-                            (insert (format "#+BIBLIOGRAPHY: %s\n" bibliography)))
-                          (when cite-export
-                            (insert (format "#+CITE_EXPORT: %s\n" cite-export)))
-                          (when library-id
-                            (insert (format "#+ZOTERO_LIBRARY_ID: %s\n" library-id))))
-                        (insert "\n")
-                        (insert formatted))
-                      (message "✅ Annotations saved to: %s" output-file)
-                      output-file)
-                  (let ((notes-buffer (get-buffer-create "*Zotero Annotations*")))
-                    (with-current-buffer notes-buffer
-                      (erase-buffer)
-                      (insert (format "#+TITLE: %s\n" title))
-                      ;; Include important org keywords from source file
-                      (let ((bibliography (cdr (assoc "BIBLIOGRAPHY" source-keywords)))
-                            (cite-export (cdr (assoc "CITE_EXPORT" source-keywords)))
-                            (library-id (or buffer-library-id (cdr (assoc "ZOTERO_LIBRARY_ID" source-keywords)))))
-                        (when bibliography
-                          (insert (format "#+BIBLIOGRAPHY: %s\n" bibliography)))
-                        (when cite-export
-                          (insert (format "#+CITE_EXPORT: %s\n" cite-export)))
-                        (when library-id
-                          (insert (format "#+ZOTERO_LIBRARY_ID: %s\n" library-id))))
-                      (insert "\n")
-                      (insert formatted)
-                      (org-mode)
-                      (goto-char (point-min)))
-                    (display-buffer notes-buffer)
-                    (message "✅ Annotations displayed in buffer")
-                    notes-buffer))))))))
+            (let ((notes-buffer (get-buffer-create "*Zotero Annotations*")))
+              (with-current-buffer notes-buffer
+                (erase-buffer)
+                (insert "#+TITLE: All Annotations from Citations\n")
+                ;; Include important org keywords from source file
+                (let ((bibliography (cdr (assoc "BIBLIOGRAPHY" source-keywords)))
+                      (cite-export (cdr (assoc "CITE_EXPORT" source-keywords)))
+                      (library-id (or buffer-library-id (cdr (assoc "ZOTERO_LIBRARY_ID" source-keywords)))))
+                  (when bibliography
+                    (insert (format "#+BIBLIOGRAPHY: %s\n" bibliography)))
+                  (when cite-export
+                    (insert (format "#+CITE_EXPORT: %s\n" cite-export)))
+                  (when library-id
+                    (insert (format "#+ZOTERO_LIBRARY_ID: %s\n" library-id))))
+                (insert "\n")
+                (insert all-formatted-content)
+                (org-mode)
+                (goto-char (point-min)))
+              (display-buffer notes-buffer)
+              (message "✅ Annotations from %d items displayed in buffer" total-items-processed)
+              notes-buffer)))))))
 
 ;;; Collection annotation functions
 
@@ -332,7 +349,7 @@ Prompts user to select library, collection, and output file."
                         (goto-char (point-min)))
                       (display-buffer notes-buffer))
                     
-                    output-file)))))))))))
+                    output-file))))))))))
 
 ;;;###autoload  
 (defun org-zotero-extract-collection-annotations (collection-id &optional library-id output-file)
@@ -380,7 +397,7 @@ OUTPUT-FILE is optional output file path."
                   (insert formatted-content))
                 
                 (message "✅ Collection annotations saved to: %s" output-file)
-                output-file)))))))))
+                output-file))))))))
 
 (provide 'org-zotero-client)
 

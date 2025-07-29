@@ -529,6 +529,103 @@ class ZoteroLocalAPI:
         
         return "\n".join(org_content)
     
+    def format_as_markdown(self, annotations_data: Dict[str, Any], citation_key: Optional[str] = None) -> str:
+        """
+        Format annotation data as markdown text
+        
+        Args:
+            annotations_data: Result from get_all_annotations_for_item
+            citation_key: Optional BibTeX citation key for citations
+            
+        Returns:
+            Formatted markdown string
+        """
+        if "error" in annotations_data:
+            return f"# Error: {annotations_data['error']}\n"
+        
+        md_content = []
+        
+        # Main header with item info
+        item_title = self.normalize_text_encoding(annotations_data.get('item_title', 'Unknown'))
+        item_type = annotations_data.get('item_type', 'Unknown')
+        item_id = annotations_data.get('item_id', 'Unknown')
+        
+        md_content.append(f"# {item_title}")
+        md_content.append("")
+        md_content.append(f"**Item Type:** {item_type}")
+        md_content.append(f"**Zotero Key:** {item_id}")
+        md_content.append("")
+        
+        # Process each PDF attachment
+        for attachment in annotations_data.get('attachments', []):
+            attachment_title = self.normalize_text_encoding(attachment.get('attachment_title', 'Unknown PDF'))
+            attachment_id = attachment.get('attachment_id', 'Unknown')
+            filename = attachment.get('filename', 'Unknown')
+            annotations = attachment.get('annotations', [])
+            
+            # PDF header
+            md_content.append(f"## {attachment_title}")
+            md_content.append("")
+            md_content.append(f"**Attachment ID:** {attachment_id}")
+            md_content.append(f"**Filename:** {filename}")
+            md_content.append("")
+            
+            if not annotations:
+                md_content.append("No annotations found.")
+                md_content.append("")
+                continue
+            
+            # Collect all annotation texts first
+            annotation_texts = []
+            comments = []
+            
+            for i, annotation in enumerate(annotations, 1):
+                ann_data = annotation.get('data', {})
+                ann_type = ann_data.get('annotationType', 'unknown')
+                text = self.normalize_text_encoding(ann_data.get('annotationText', ''))
+                comment = self.normalize_text_encoding(ann_data.get('annotationComment', ''))
+                
+                # Get page number if available
+                page_label = ann_data.get('annotationPageLabel', '')
+                position = ann_data.get('annotationPosition', {})
+                page_index = position.get('pageIndex', '') if isinstance(position, dict) else ''
+                
+                # Create Zotero link
+                zotero_link = f"zotero://select/library/items/{attachment_id}"
+                if page_label:
+                    zotero_link += f"?page={page_label}"
+                elif page_index:
+                    zotero_link += f"?page={page_index + 1}"  # Page index is 0-based
+                
+                # Collect annotation text with citation
+                if text:
+                    annotation_text = text
+                    
+                    # Add citation
+                    if citation_key:
+                        page_info = page_label if page_label else str(page_index + 1) if page_index else "?"
+                        annotation_text += f"\n\n[cite:@{citation_key}, p.{page_info}]"
+                    
+                    annotation_texts.append(annotation_text)
+                
+                # Collect annotation comment
+                if comment:
+                    comments.append(f"**Comment:** {comment}")
+            
+            # Add single quote block for all annotations from this PDF
+            if annotation_texts:
+                md_content.append("::: .quote")
+                md_content.append("\n\n".join(annotation_texts))
+                md_content.append(":::")
+                md_content.append("")
+            
+            # Add comments after the quote block
+            if comments:
+                md_content.extend(comments)
+                md_content.append("")
+        
+        return "\n".join(md_content)
+    
     def get_citation_key_for_item(self, item_id: str, library_id: Optional[str] = None) -> Optional[str]:
         """
         Get the BibTeX citation key for a Zotero item by exporting it as BibTeX.
@@ -735,18 +832,78 @@ class ZoteroLocalAPI:
             org_content.append("")
         
         return "\n".join(org_content)
+    
+    def format_collection_annotations_as_markdown(self, collection_data: Dict[str, Any]) -> str:
+        """
+        Format collection annotation data as markdown text
+        
+        Args:
+            collection_data: Result from get_all_collection_annotations
+            
+        Returns:
+            Formatted markdown string
+        """
+        if "error" in collection_data:
+            return f"# Error: {collection_data['error']}\n"
+        
+        md_content = []
+        
+        # Main collection header
+        collection_name = self.normalize_text_encoding(collection_data.get('collection_name', 'Unknown'))
+        collection_id = collection_data.get('collection_id', 'Unknown')
+        library_id = collection_data.get('library_id', 'Personal Library')
+        items_count = collection_data.get('items_count', 0)
+        items_with_annotations = len(collection_data.get('items', []))
+        
+        md_content.append(f"# Collection: {collection_name}")
+        md_content.append("")
+        md_content.append(f"**Collection ID:** {collection_id}")
+        if library_id:
+            md_content.append(f"**Library ID:** {library_id}")
+        md_content.append(f"**Total Items:** {items_count}")
+        md_content.append(f"**Items with Annotations:** {items_with_annotations}")
+        md_content.append("")
+        
+        if not collection_data.get('items'):
+            md_content.append("No items with annotations found in this collection.")
+            md_content.append("")
+            return "\n".join(md_content)
+        
+        # Process each item with annotations
+        for item_data in collection_data['items']:
+            # Get citation key for citations
+            citation_key = self.get_citation_key_for_item(item_data['item_id'], library_id)
+            
+            # Format item annotations (use existing function but at sub-level)
+            item_md = self.format_as_markdown(item_data, citation_key)
+            
+            # Adjust heading levels (add one # to each heading)
+            adjusted_lines = []
+            for line in item_md.split('\n'):
+                if line.startswith('#'):
+                    adjusted_lines.append('#' + line)
+                else:
+                    adjusted_lines.append(line)
+            
+            md_content.extend(adjusted_lines)
+            md_content.append("")
+        
+        return "\n".join(md_content)
 
 
 def main():
     """Main function to demonstrate usage"""
     if len(sys.argv) < 2 or len(sys.argv) > 3:
-        print("Usage: python get-annots.py <item_id> [--org]")
+        print("Usage: python get-annots.py <item_id> [--org|--markdown]")
         print("Example: python get-annots.py ABCD1234")
         print("Example: python get-annots.py ABCD1234 --org")
+        print("Example: python get-annots.py ABCD1234 --markdown")
         sys.exit(1)
     
     item_id = sys.argv[1]
-    org_mode = len(sys.argv) == 3 and sys.argv[2] == '--org'
+    format_type = sys.argv[2] if len(sys.argv) == 3 else None
+    org_mode = format_type == '--org'
+    markdown_mode = format_type == '--markdown'
     
     # Initialize API client
     api = ZoteroLocalAPI()
@@ -784,30 +941,37 @@ def main():
             if comment:
                 print(f"     Comment: {comment[:100]}{'...' if len(comment) > 100 else ''}")
     
-    # Handle org-mode output
-    if org_mode:
-        # Get citation key for org-cite format
-        print("Getting citation key for org-cite format...")
+    # Handle formatted output
+    if org_mode or markdown_mode:
+        # Get citation key for citations
+        print("Getting citation key for citations...")
         citation_key = api.get_citation_key_for_item(item_id)
         if citation_key:
             print(f"Citation key: {citation_key}")
         else:
             print("Warning: Could not get citation key, links will be omitted")
         
-        org_content = api.format_as_org_mode(result, citation_key)
+        if org_mode:
+            content = api.format_as_org_mode(result, citation_key)
+            file_ext = "org"
+            format_name = "ORG-MODE"
+        else:  # markdown_mode
+            content = api.format_as_markdown(result, citation_key)
+            file_ext = "md"
+            format_name = "MARKDOWN"
         
-        # Save to org file
-        org_file = f"annotations_{item_id}.org"
-        with open(org_file, 'w', encoding='utf-8') as f:
-            f.write(org_content)
+        # Save to file
+        output_file = f"annotations_{item_id}.{file_ext}"
+        with open(output_file, 'w', encoding='utf-8') as f:
+            f.write(content)
         
-        print(f"\nOrg-mode output saved to: {org_file}")
+        print(f"\n{format_name} output saved to: {output_file}")
         
         # Also print to console
         print("\n" + "="*50)
-        print("ORG-MODE OUTPUT:")
+        print(f"{format_name} OUTPUT:")
         print("="*50)
-        print(org_content)
+        print(content)
     else:
         # Save to JSON file
         output_file = f"annotations_{item_id}.json"
