@@ -1,5 +1,13 @@
 # Zotero CLI
 
+> **DEPRECATED**: This repository has been merged into [mwp-zotero-tools](https://github.com/titaniumbones/mwp-zotero-tools).
+> - Python code: `packages/zotero-cli/`
+> - Emacs Lisp: `packages/zotero-elisp/`
+>
+> This repository is archived and will no longer receive updates.
+
+---
+
 A multi-language toolkit for retrieving and processing Zotero annotations via the local API. Provides both Python and Emacs Lisp implementations with API parity wherever possible.
 
 ## 🚀 Quick Start
