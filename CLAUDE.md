@@ -83,6 +83,10 @@ python find-items-with-pdfs.py
 
 # Debug annotation retrieval
 python debug-annotations.py <item_id>
+
+# Export PDF/EPUB attachments and convert to markdown
+python export-attachments.py library
+python export-attachments.py collection <collection_id>
 ```
 
 #### Collection Annotation Examples
@@ -96,6 +100,60 @@ python get-collection-annots.py XYZ789GHI --library-id 12345 --output research_n
 
 # Get JSON output for programmatic processing
 python get-collection-annots.py ABC123DEF --library-id 12345 --output collection_data.json
+```
+
+#### Attachment Export Examples
+
+```bash
+# Export all PDF/EPUB attachments from personal library
+python export-attachments.py library
+
+# Export from specific group library to custom folder
+python export-attachments.py library --library-id 12345 --target my_papers
+
+# Export from collection in personal library
+python export-attachments.py collection ABC123DEF
+
+# Export from group library collection with custom settings
+python export-attachments.py collection XYZ789GHI --library-id 12345 --target research_collection
+
+# Export only PDFs without markdown conversion
+python export-attachments.py library --types pdf --no-convert
+
+# Export with verbose output and save summary
+python export-attachments.py collection ABC123DEF --verbose --output-summary export_summary.json
+
+# Dry run to see what would be exported
+python export-attachments.py --dry-run library
+```
+
+**Output Structure:**
+```
+target_folder/
+├── originals/          # Original PDF/EPUB files (named with citation keys)
+│   ├── smith2023.pdf
+│   └── jones2024.epub
+└── markdown/           # Converted markdown files with YAML frontmatter
+    ├── smith2023.md
+    └── jones2024.md
+```
+
+**Markdown File Format:**
+```yaml
+---
+title: "Original Document Title"
+author: "Author Name"
+year: 2023
+citation_key: "smith2023"
+zotero_key: "ABC123DEF"
+original_file: "../originals/smith2023.pdf"
+item_type: "journalArticle"
+publication: "Journal Name"
+doi: "10.1000/123456"
+---
+
+# Document content converted to markdown by markitdown
+...
 ```
 
 ### Emacs Lisp Implementation
@@ -237,6 +295,15 @@ The `ZoteroLocalAPI` class now includes:
 - `get_all_collection_annotations(collection_id, library_id=None)` - Get all annotations from all items in a collection
 - `format_collection_annotations_as_org(collection_data)` - Format collection annotations as org-mode text
 
+**File Attachment Management:**
+- `get_file_attachments(item_id, library_id=None, file_types=['pdf', 'epub'])` - Get file attachments for item
+- `download_attachment_file(attachment_id, target_path, library_id=None)` - Download attachment to local filesystem
+- `get_attachment_metadata(item_id, library_id=None)` - Extract metadata for YAML frontmatter
+
+**Bulk Export Functions:**
+- `export_library_attachments(library_id=None, target_folder='zotero_export', file_types=['pdf', 'epub'], convert_to_markdown=True)` - Export all attachments from library
+- `export_collection_attachments(collection_id, library_id=None, target_folder='zotero_collection_export', file_types=['pdf', 'epub'], convert_to_markdown=True)` - Export all attachments from collection
+
 ### Testing Scripts
 
 #### Python (`python/`)
@@ -246,6 +313,9 @@ The `ZoteroLocalAPI` class now includes:
   - `python get-annots.py ITEM_ID --org` - Org-mode output
 - `debug-annotations.py` - Debug annotation retrieval step by step
 - `find-items-with-pdfs.py` - Find items that have PDF attachments
+- `export-attachments.py` - Export PDF/EPUB attachments with markdown conversion
+  - `python export-attachments.py library` - Export from personal library
+  - `python export-attachments.py collection COLLECTION_ID` - Export from collection
 
 #### Emacs Lisp (`elisp/`)
 - `zotero-list-libraries.el` - Library and collection exploration

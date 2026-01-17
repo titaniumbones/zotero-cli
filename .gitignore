@@ -102,11 +102,24 @@ local_api_key.txt
 
 # Test and debug output
 test_output/
+test_small/
+test_export/
+/test/
+python/test/
 debug_*.json
 test_annotations_*.org
+test_output*.org
 sample_*.org
+**/test_download.pdf
+**/libraries_info.json
+**/sample_zotero_export.bib
+zotero_library_export/
+python/zotero_bibtex_mapping.md
 
 # Package management
 node_modules/
 package-lock.json
 yarn.lock
+
+# Claude Code settings
+.claude/

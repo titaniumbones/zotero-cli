@@ -97,15 +97,38 @@ class ZoteroLocalAPI:
         Returns:
             List of PDF attachment items
         """
+        return self.get_file_attachments(item_id, library_id, ['pdf'])
+    
+    def get_file_attachments(self, item_id: str, library_id: Optional[str] = None, 
+                           file_types: List[str] = ['pdf', 'epub']) -> List[Dict[Any, Any]]:
+        """
+        Get all file attachments of specified types for a given item
+        
+        Args:
+            item_id: Zotero item ID
+            library_id: Library/group ID (if None, uses personal library)
+            file_types: List of file types to include ('pdf', 'epub')
+            
+        Returns:
+            List of file attachment items
+        """
         children = self.get_item_children(item_id, library_id)
-        pdf_attachments = []
+        file_attachments = []
+        
+        # Map file types to MIME types
+        content_type_map = {
+            'pdf': 'application/pdf',
+            'epub': 'application/epub+zip'
+        }
+        
+        allowed_content_types = [content_type_map[ft] for ft in file_types if ft in content_type_map]
         
         for child in children:
             if (child.get('data', {}).get('itemType') == 'attachment' and 
-                child.get('data', {}).get('contentType') == 'application/pdf'):
-                pdf_attachments.append(child)
+                child.get('data', {}).get('contentType') in allowed_content_types):
+                file_attachments.append(child)
         
-        return pdf_attachments
+        return file_attachments
     
     def get_attachment_annotations(self, attachment_id: str, library_id: Optional[str] = None) -> List[Dict[Any, Any]]:
         """
@@ -682,6 +705,166 @@ class ZoteroLocalAPI:
         except Exception as e:
             return None
     
+    def download_attachment_file(self, attachment_id: str, target_path: str, library_id: Optional[str] = None) -> bool:
+        """
+        Download an attachment file to the local filesystem.
+        
+        Args:
+            attachment_id: Zotero attachment item ID
+            target_path: Local file path where attachment should be saved
+            library_id: Optional library ID for group libraries
+            
+        Returns:
+            True if download successful, False otherwise
+        """
+        try:
+            import os
+            import shutil
+            import urllib.parse
+            import re
+            
+            # Get attachment details to check if file is available locally
+            attachment_details = self.get_item(attachment_id, library_id)
+            if not attachment_details:
+                print(f"Could not retrieve attachment details for {attachment_id}")
+                return False
+            
+            # Construct file download URL
+            if library_id:
+                url = f"{self.base_url}/api/groups/{library_id}/items/{attachment_id}/file"
+            else:
+                url = f"{self.base_url}/api/users/0/items/{attachment_id}/file"
+            
+            # Create target directory if it doesn't exist
+            target_dir = os.path.dirname(target_path)
+            if target_dir:  # Only create directory if there is one
+                os.makedirs(target_dir, exist_ok=True)
+            
+            # Try HEAD request first to check if endpoint exists and get redirect
+            head_response = requests.head(url, allow_redirects=False)
+            
+            # Check if we got a redirect with a file:// URL
+            if head_response.status_code in [301, 302, 303, 307, 308]:
+                redirect_url = head_response.headers.get('Location', '')
+                
+                if redirect_url.startswith('file://'):
+                    # Extract local file path from file:// URL
+                    local_path = urllib.parse.unquote(redirect_url[7:])  # Remove 'file://' prefix
+                    
+                    if os.path.exists(local_path):
+                        shutil.copy2(local_path, target_path)
+                        return os.path.exists(target_path)
+                    else:
+                        print(f"Warning: Local file does not exist: {local_path}")
+                        return False
+            
+            # If no redirect or not a file:// redirect, try direct download
+            try:
+                response = requests.get(url, stream=True, allow_redirects=True)
+                
+                if response.status_code == 200:
+                    with open(target_path, 'wb') as f:
+                        shutil.copyfileobj(response.raw, f)
+                    return os.path.exists(target_path)
+                else:
+                    print(f"Failed to download attachment {attachment_id}: HTTP {response.status_code}")
+                    return False
+                    
+            except requests.exceptions.InvalidSchema as e:
+                # This happens when we get redirected to file:// but requests follows it
+                # Extract the file path from the error message
+                error_str = str(e)
+                if 'file://' in error_str:
+                    file_match = re.search(r"file://([^']+)", error_str)
+                    if file_match:
+                        local_path = urllib.parse.unquote(file_match.group(1))
+                        
+                        if os.path.exists(local_path):
+                            shutil.copy2(local_path, target_path)
+                            return os.path.exists(target_path)
+                return False
+                
+        except Exception as e:
+            print(f"Error downloading attachment {attachment_id}: {e}")
+            return False
+    
+    def get_attachment_metadata(self, item_id: str, library_id: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Extract metadata for a Zotero item suitable for YAML frontmatter.
+        
+        Args:
+            item_id: Zotero item ID
+            library_id: Optional library ID for group libraries
+            
+        Returns:
+            Dictionary with metadata fields
+        """
+        try:
+            item_data = self.get_item(item_id, library_id)
+            if not item_data:
+                return {}
+            
+            data = item_data.get('data', {})
+            
+            # Extract basic metadata
+            metadata = {
+                'title': self.normalize_text_encoding(data.get('title', 'Unknown Title')),
+                'zotero_key': item_id,
+                'item_type': data.get('itemType', 'unknown')
+            }
+            
+            # Extract authors
+            creators = data.get('creators', [])
+            if creators:
+                authors = []
+                for creator in creators:
+                    if creator.get('creatorType') in ['author', 'editor']:
+                        first_name = creator.get('firstName', '')
+                        last_name = creator.get('lastName', '')
+                        if first_name and last_name:
+                            authors.append(f"{first_name} {last_name}")
+                        elif last_name:
+                            authors.append(last_name)
+                        elif creator.get('name'):  # Organization name
+                            authors.append(creator.get('name'))
+                
+                if authors:
+                    metadata['author'] = authors[0] if len(authors) == 1 else authors
+            
+            # Extract year
+            date = data.get('date', '')
+            if date:
+                # Try to extract year from various date formats
+                import re
+                year_match = re.search(r'\b(19|20)\d{2}\b', date)
+                if year_match:
+                    metadata['year'] = int(year_match.group())
+            
+            # Get citation key
+            citation_key = self.get_citation_key_for_item(item_id, library_id)
+            if citation_key:
+                metadata['citation_key'] = citation_key
+            
+            # Add publication details if available
+            if data.get('publicationTitle'):
+                metadata['publication'] = self.normalize_text_encoding(data['publicationTitle'])
+            if data.get('volume'):
+                metadata['volume'] = data['volume']
+            if data.get('issue'):
+                metadata['issue'] = data['issue']
+            if data.get('pages'):
+                metadata['pages'] = data['pages']
+            if data.get('DOI'):
+                metadata['doi'] = data['DOI']
+            if data.get('url'):
+                metadata['url'] = data['url']
+            
+            return metadata
+            
+        except Exception as e:
+            print(f"Error extracting metadata for item {item_id}: {e}")
+            return {}
+    
     def get_collection_items(self, collection_id: str, library_id: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
         """
         Get all items from a specific collection
@@ -889,6 +1072,305 @@ class ZoteroLocalAPI:
             md_content.append("")
         
         return "\n".join(md_content)
+    
+    def export_library_attachments(self, library_id: Optional[str] = None, target_folder: str = "zotero_export", 
+                                 file_types: List[str] = ['pdf', 'epub'], convert_to_markdown: bool = True) -> Dict[str, Any]:
+        """
+        Export all file attachments from a library to a local folder.
+        
+        Args:
+            library_id: Library ID (None for personal library)
+            target_folder: Target folder for export
+            file_types: List of file types to export ('pdf', 'epub')
+            convert_to_markdown: Whether to convert files to markdown using markitdown
+            
+        Returns:
+            Summary dictionary with export statistics
+        """
+        import os
+        from pathlib import Path
+        
+        try:
+            from markitdown import MarkItDown
+            import yaml
+        except ImportError:
+            print("Error: markitdown and pyyaml libraries are required. Install with: pip install markitdown pyyaml")
+            return {'error': 'Missing dependencies'}
+        
+        md = MarkItDown()
+        
+        # Create directory structure
+        target_path = Path(target_folder)
+        originals_path = target_path / "originals"
+        markdown_path = target_path / "markdown"
+        
+        originals_path.mkdir(parents=True, exist_ok=True)
+        if convert_to_markdown:
+            markdown_path.mkdir(parents=True, exist_ok=True)
+        
+        # Get all items from library
+        items = self.get_items(library_id, limit=1000)
+        
+        exported_files = []
+        failed_downloads = []
+        
+        print(f"Processing {len(items)} items from library...")
+        
+        for item in items:
+            item_id = item.get('key')
+            if not item_id:
+                continue
+                
+            # Get file attachments for this item
+            attachments = self.get_file_attachments(item_id, library_id, file_types)
+            
+            if not attachments:
+                continue
+                
+            # Get metadata for the parent item
+            metadata = self.get_attachment_metadata(item_id, library_id)
+            citation_key = metadata.get('citation_key', item_id)
+            
+            print(f"Processing item: {metadata.get('title', 'Unknown')} ({citation_key})")
+            
+            for attachment in attachments:
+                attachment_id = attachment.get('key')
+                attachment_data = attachment.get('data', {})
+                filename = attachment_data.get('filename', 'unknown')
+                content_type = attachment_data.get('contentType', '')
+                
+                # Determine file extension
+                if content_type == 'application/pdf':
+                    ext = '.pdf'
+                elif content_type == 'application/epub+zip':
+                    ext = '.epub'
+                else:
+                    continue
+                
+                # Create safe filename using citation key
+                safe_filename = f"{citation_key}{ext}"
+                original_file_path = originals_path / safe_filename
+                
+                # Download original file
+                print(f"  Downloading {filename} -> {safe_filename}")
+                if self.download_attachment_file(attachment_id, str(original_file_path), library_id):
+                    exported_files.append({
+                        'item_id': item_id,
+                        'attachment_id': attachment_id,
+                        'original_filename': filename,
+                        'exported_filename': safe_filename,
+                        'citation_key': citation_key,
+                        'file_type': ext[1:]  # Remove the dot
+                    })
+                    
+                    # Convert to markdown if requested
+                    if convert_to_markdown:
+                        markdown_file_path = markdown_path / f"{citation_key}.md"
+                        print(f"  Converting to markdown: {markdown_file_path.name}")
+                        
+                        try:
+                            # Convert file to markdown
+                            result = md.convert(str(original_file_path))
+                            markdown_content = result.text_content
+                            
+                            # Add YAML frontmatter
+                            yaml_metadata = metadata.copy()
+                            yaml_metadata['original_file'] = f"../originals/{safe_filename}"
+                            
+                            # Create full markdown content with frontmatter
+                            yaml_frontmatter = yaml.dump(yaml_metadata, default_flow_style=False, allow_unicode=True)
+                            full_content = f"---\n{yaml_frontmatter}---\n\n{markdown_content}"
+                            
+                            # Write markdown file
+                            with open(markdown_file_path, 'w', encoding='utf-8') as f:
+                                f.write(full_content)
+                                
+                        except Exception as e:
+                            print(f"  Warning: Failed to convert {safe_filename} to markdown: {e}")
+                    
+                else:
+                    failed_downloads.append({
+                        'item_id': item_id,
+                        'attachment_id': attachment_id,
+                        'filename': filename,
+                        'citation_key': citation_key
+                    })
+        
+        # Return summary
+        summary = {
+            'total_files_exported': len(exported_files),
+            'failed_downloads': len(failed_downloads),
+            'target_folder': str(target_path),
+            'file_types': file_types,
+            'converted_to_markdown': convert_to_markdown,
+            'exported_files': exported_files
+        }
+        
+        if failed_downloads:
+            summary['failed_downloads_list'] = failed_downloads
+        
+        print(f"\n✅ Export complete!")
+        print(f"   Exported {len(exported_files)} files to {target_path}")
+        if failed_downloads:
+            print(f"   ⚠️  {len(failed_downloads)} downloads failed")
+        
+        return summary
+    
+    def export_collection_attachments(self, collection_id: str, library_id: Optional[str] = None, 
+                                    target_folder: str = "zotero_collection_export", 
+                                    file_types: List[str] = ['pdf', 'epub'], 
+                                    convert_to_markdown: bool = True) -> Dict[str, Any]:
+        """
+        Export all file attachments from a collection to a local folder.
+        
+        Args:
+            collection_id: Collection ID
+            library_id: Library ID (None for personal library)
+            target_folder: Target folder for export
+            file_types: List of file types to export ('pdf', 'epub')
+            convert_to_markdown: Whether to convert files to markdown using markitdown
+            
+        Returns:
+            Summary dictionary with export statistics
+        """
+        import os
+        from pathlib import Path
+        
+        try:
+            from markitdown import MarkItDown
+            import yaml
+        except ImportError:
+            print("Error: markitdown and pyyaml libraries are required. Install with: pip install markitdown pyyaml")
+            return {'error': 'Missing dependencies'}
+        
+        md = MarkItDown()
+        
+        # Get collection info
+        collection_info = self.get_collection_info(collection_id, library_id)
+        collection_name = collection_info.get('data', {}).get('name', 'Unknown Collection') if collection_info else 'Unknown Collection'
+        
+        print(f"Exporting attachments from collection: {collection_name}")
+        
+        # Create directory structure
+        target_path = Path(target_folder)
+        originals_path = target_path / "originals"
+        markdown_path = target_path / "markdown"
+        
+        originals_path.mkdir(parents=True, exist_ok=True)
+        if convert_to_markdown:
+            markdown_path.mkdir(parents=True, exist_ok=True)
+        
+        # Get all items from collection
+        items = self.get_collection_items(collection_id, library_id)
+        
+        exported_files = []
+        failed_downloads = []
+        
+        print(f"Processing {len(items)} items from collection...")
+        
+        for item in items:
+            item_id = item.get('key')
+            if not item_id:
+                continue
+                
+            # Get file attachments for this item
+            attachments = self.get_file_attachments(item_id, library_id, file_types)
+            
+            if not attachments:
+                continue
+                
+            # Get metadata for the parent item
+            metadata = self.get_attachment_metadata(item_id, library_id)
+            citation_key = metadata.get('citation_key', item_id)
+            
+            print(f"Processing item: {metadata.get('title', 'Unknown')} ({citation_key})")
+            
+            for attachment in attachments:
+                attachment_id = attachment.get('key')
+                attachment_data = attachment.get('data', {})
+                filename = attachment_data.get('filename', 'unknown')
+                content_type = attachment_data.get('contentType', '')
+                
+                # Determine file extension
+                if content_type == 'application/pdf':
+                    ext = '.pdf'
+                elif content_type == 'application/epub+zip':
+                    ext = '.epub'
+                else:
+                    continue
+                
+                # Create safe filename using citation key
+                safe_filename = f"{citation_key}{ext}"
+                original_file_path = originals_path / safe_filename
+                
+                # Download original file
+                print(f"  Downloading {filename} -> {safe_filename}")
+                if self.download_attachment_file(attachment_id, str(original_file_path), library_id):
+                    exported_files.append({
+                        'item_id': item_id,
+                        'attachment_id': attachment_id,
+                        'original_filename': filename,
+                        'exported_filename': safe_filename,
+                        'citation_key': citation_key,
+                        'file_type': ext[1:]  # Remove the dot
+                    })
+                    
+                    # Convert to markdown if requested
+                    if convert_to_markdown:
+                        markdown_file_path = markdown_path / f"{citation_key}.md"
+                        print(f"  Converting to markdown: {markdown_file_path.name}")
+                        
+                        try:
+                            # Convert file to markdown
+                            result = md.convert(str(original_file_path))
+                            markdown_content = result.text_content
+                            
+                            # Add YAML frontmatter
+                            yaml_metadata = metadata.copy()
+                            yaml_metadata['original_file'] = f"../originals/{safe_filename}"
+                            yaml_metadata['collection'] = collection_name
+                            yaml_metadata['collection_id'] = collection_id
+                            
+                            # Create full markdown content with frontmatter
+                            yaml_frontmatter = yaml.dump(yaml_metadata, default_flow_style=False, allow_unicode=True)
+                            full_content = f"---\n{yaml_frontmatter}---\n\n{markdown_content}"
+                            
+                            # Write markdown file
+                            with open(markdown_file_path, 'w', encoding='utf-8') as f:
+                                f.write(full_content)
+                                
+                        except Exception as e:
+                            print(f"  Warning: Failed to convert {safe_filename} to markdown: {e}")
+                    
+                else:
+                    failed_downloads.append({
+                        'item_id': item_id,
+                        'attachment_id': attachment_id,
+                        'filename': filename,
+                        'citation_key': citation_key
+                    })
+        
+        # Return summary
+        summary = {
+            'collection_name': collection_name,
+            'collection_id': collection_id,
+            'total_files_exported': len(exported_files),
+            'failed_downloads': len(failed_downloads),
+            'target_folder': str(target_path),
+            'file_types': file_types,
+            'converted_to_markdown': convert_to_markdown,
+            'exported_files': exported_files
+        }
+        
+        if failed_downloads:
+            summary['failed_downloads_list'] = failed_downloads
+        
+        print(f"\n✅ Export complete!")
+        print(f"   Exported {len(exported_files)} files from '{collection_name}' to {target_path}")
+        if failed_downloads:
+            print(f"   ⚠️  {len(failed_downloads)} downloads failed")
+        
+        return summary
 
 
 def main():
